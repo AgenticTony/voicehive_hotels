@@ -184,4 +184,4 @@ See the individual sprint plans for detailed information on each sprint's goals,
 - [Sprint 11: Support System](./SPRINT_11.md)
 - [Sprint 12: Testing & Optimization](./SPRINT_12.md)
 - [Sprint 13: Beta Launch Preparation](./SPRINT_13.md)
-- [Sprint 14: Beta Launch & Iteration](./SPRINT_14.md)
+- [Sprint 14: Beta Feedback Implementation & Public Launch](./SPRINT_14.md)
