@@ -33,6 +33,10 @@ venv/
 ENV/
 env/
 .venv
+.venv311/
+
+# Python version management
+.python-version
 
 # Testing
 .coverage

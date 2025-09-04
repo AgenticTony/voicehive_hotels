@@ -1,0 +1,305 @@
+# Prometheus Stack Helm Values for VoiceHive Hotels
+# kube-prometheus-stack configuration with EU compliance
+
+# Prometheus configuration
+prometheus:
+  prometheusSpec:
+    # Resource limits for Prometheus
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: 1
+      limits:
+        memory: 4Gi
+        cpu: 2
+    
+    # Storage configuration
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+          storageClassName: gp3  # Use gp3 for cost efficiency
+    
+    # Retention policy (GDPR compliant)
+    retention: 30d
+    retentionSize: 45GB
+    
+    # Service monitor selectors
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    
+    # Additional scrape configs for VoiceHive services
+    additionalScrapeConfigs:
+      - job_name: 'voicehive-orchestrator'
+        kubernetes_sd_configs:
+          - role: service
+            namespaces:
+              names: ['voicehive']
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            regex: orchestrator
+            action: keep
+          - source_labels: [__meta_kubernetes_service_port_name]
+            regex: metrics
+            action: keep
+      
+      - job_name: 'voicehive-connectors'
+        kubernetes_sd_configs:
+          - role: service
+            namespaces:
+              names: ['voicehive']
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name]
+            regex: connectors
+            action: keep
+          - source_labels: [__meta_kubernetes_service_port_name]
+            regex: metrics
+            action: keep
+
+# Grafana configuration
+grafana:
+  enabled: true
+  
+  # Admin credentials (should be changed in production)
+  adminPassword: "changeme"
+  
+  # Persistence for dashboards
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: gp3
+  
+  # Resource limits
+  resources:
+    limits:
+      memory: 512Mi
+      cpu: 500m
+    requests:
+      memory: 256Mi
+      cpu: 100m
+  
+  # Pre-configured data sources
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          url: http://prometheus-stack-kube-prom-prometheus:9090
+          access: proxy
+          isDefault: true
+  
+  # Dashboard providers
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'voicehive'
+          orgId: 1
+          folder: 'VoiceHive'
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/voicehive
+  
+  # Pre-loaded dashboards
+  dashboards:
+    voicehive:
+      pms-connectors:
+        json: |
+          {
+            "dashboard": {
+              "title": "PMS Connectors Overview",
+              "panels": [
+                {
+                  "title": "Connector API Response Time (P95)",
+                  "targets": [
+                    {
+                      "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service=\"connectors\"}[5m])) by (le, vendor))"
+                    }
+                  ]
+                },
+                {
+                  "title": "Connector Error Rate",
+                  "targets": [
+                    {
+                      "expr": "sum(rate(http_requests_total{service=\"connectors\",status=~\"5..\"}[5m])) by (vendor)"
+                    }
+                  ]
+                },
+                {
+                  "title": "Active Connector Instances",
+                  "targets": [
+                    {
+                      "expr": "up{job=\"voicehive-connectors\"}"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+      
+      voice-pipeline:
+        json: |
+          {
+            "dashboard": {
+              "title": "Voice Pipeline Metrics",
+              "panels": [
+                {
+                  "title": "End-to-End Latency (P95)",
+                  "targets": [
+                    {
+                      "expr": "histogram_quantile(0.95, sum(rate(voice_pipeline_latency_seconds_bucket[5m])) by (le, stage))"
+                    }
+                  ]
+                },
+                {
+                  "title": "ASR Processing Time",
+                  "targets": [
+                    {
+                      "expr": "histogram_quantile(0.95, rate(asr_processing_duration_seconds_bucket[5m]))"
+                    }
+                  ]
+                },
+                {
+                  "title": "TTS Processing Time",
+                  "targets": [
+                    {
+                      "expr": "histogram_quantile(0.95, rate(tts_processing_duration_seconds_bucket[5m]))"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+
+# Alertmanager configuration
+alertmanager:
+  enabled: true
+  
+  config:
+    global:
+      resolve_timeout: 5m
+    
+    route:
+      group_by: ['alertname', 'cluster', 'service']
+      group_wait: 10s
+      group_interval: 10s
+      repeat_interval: 12h
+      receiver: 'default-receiver'
+      routes:
+        - match:
+            severity: critical
+          receiver: pagerduty
+        - match:
+            severity: warning
+          receiver: slack
+    
+    receivers:
+      - name: 'default-receiver'
+        # Configure your default notification channel
+      
+      - name: 'pagerduty'
+        pagerduty_configs:
+          - service_key: 'YOUR_PAGERDUTY_SERVICE_KEY'
+      
+      - name: 'slack'
+        slack_configs:
+          - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+            channel: '#voicehive-alerts'
+
+# Prometheus Operator configuration
+prometheusOperator:
+  resources:
+    limits:
+      cpu: 200m
+      memory: 200Mi
+    requests:
+      cpu: 100m
+      memory: 100Mi
+
+# Node exporter for infrastructure metrics
+nodeExporter:
+  enabled: true
+
+# Kube-state-metrics for Kubernetes metrics
+kubeStateMetrics:
+  enabled: true
+
+# Additional Prometheus rules
+defaultRules:
+  create: true
+  rules:
+    alertmanager: true
+    etcd: false  # Not using etcd
+    general: true
+    k8s: true
+    kubeApiserver: true
+    kubeApiserverAvailability: true
+    kubeApiserverError: true
+    kubeApiserverHistogram: true
+    kubeApiserverSlos: true
+    kubelet: true
+    kubePrometheusGeneral: true
+    kubePrometheusNodeAlerting: true
+    kubePrometheusNodeRecording: true
+    kubernetesAbsent: true
+    kubernetesApps: true
+    kubernetesResources: true
+    kubernetesStorage: true
+    kubernetesSystem: true
+    kubeScheduler: true
+    kubeStateMetrics: true
+    network: true
+    node: true
+    prometheus: true
+    prometheusOperator: true
+    time: true
+
+# Custom Prometheus rules for VoiceHive
+additionalPrometheusRules:
+  - name: voicehive-sla-rules
+    groups:
+      - name: voicehive.rules
+        interval: 30s
+        rules:
+          - alert: VoiceHiveHighLatency
+            expr: |
+              histogram_quantile(0.95, 
+                sum(rate(voice_pipeline_latency_seconds_bucket[5m])) by (le)
+              ) > 0.5
+            for: 5m
+            labels:
+              severity: critical
+              team: voicehive
+            annotations:
+              summary: "Voice pipeline latency exceeds 500ms SLA"
+              description: "P95 latency is {{ $value }}s (SLA: 500ms)"
+          
+          - alert: ConnectorErrorRate
+            expr: |
+              sum(rate(http_requests_total{service="connectors",status=~"5.."}[5m])) by (vendor)
+              / sum(rate(http_requests_total{service="connectors"}[5m])) by (vendor)
+              > 0.05
+            for: 10m
+            labels:
+              severity: warning
+              team: voicehive
+            annotations:
+              summary: "High error rate for {{ $labels.vendor }} connector"
+              description: "Error rate is {{ $value | humanizePercentage }}"
+          
+          - alert: VaultHealthCheckFailing
+            expr: |
+              up{job="voicehive-orchestrator", endpoint="vault_health"} == 0
+            for: 5m
+            labels:
+              severity: critical
+              team: voicehive
+            annotations:
+              summary: "Vault health check is failing"
+              description: "Orchestrator cannot connect to HashiCorp Vault"

@@ -1,0 +1,686 @@
+name: VoiceHive Hotels Enhanced CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options:
+        - staging
+        - production
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+  AWS_REGION: eu-west-1
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+  GO_VERSION: '1.21'
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+  id-token: write
+  actions: read
+
+jobs:
+  # Comprehensive security scanning
+  security-scan:
+    name: Security Scanning Suite
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Run Gitleaks
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Run TruffleHog
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event.repository.default_branch }}
+        head: HEAD
+        extra_args: --debug --only-verified
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+
+    - name: Upload Trivy results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Run Semgrep
+      uses: returntocorp/semgrep-action@v1
+      with:
+        config: >-
+          p/security-audit
+          p/python
+          p/golang
+          p/typescript
+          p/owasp-top-ten
+          p/r2c-security-audit
+        generateSarif: true
+
+    - name: Upload Semgrep results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: semgrep.sarif
+
+    - name: Run Snyk security scan
+      uses: snyk/actions/python@master
+      continue-on-error: true
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=high --policy-path=.snyk
+
+  # CodeQL Analysis
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    strategy:
+      matrix:
+        language: ['python', 'go', 'javascript']
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v2
+      with:
+        languages: ${{ matrix.language }}
+        queries: security-and-quality
+
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v2
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v2
+
+  # Python testing with coverage
+  python-tests:
+    name: Python Tests & Quality
+    runs-on: ubuntu-latest
+    needs: security-scan
+    strategy:
+      matrix:
+        service: [orchestrator, connectors, compliance, media]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/pip
+          ~/.cache/pypoetry
+        key: ${{ runner.os }}-python-${{ matrix.service }}-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install poetry
+        cd services/${{ matrix.service }}
+        [ -f pyproject.toml ] && poetry install || pip install -r requirements.txt -r requirements-dev.txt
+
+    - name: Type checking
+      run: |
+        cd services/${{ matrix.service }}
+        mypy . --strict --ignore-missing-imports
+
+    - name: Linting
+      run: |
+        cd services/${{ matrix.service }}
+        ruff check .
+        black --check .
+        isort --check-only .
+
+    - name: Security checks
+      run: |
+        cd services/${{ matrix.service }}
+        bandit -r . -ll -f json -o bandit-report.json
+        safety check --json > safety-report.json || true
+
+    - name: Run tests
+      run: |
+        cd services/${{ matrix.service }}
+        pytest tests/ \
+          --cov=. \
+          --cov-report=xml \
+          --cov-report=html \
+          --cov-report=term \
+          --junitxml=test-results.xml \
+          -v
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./services/${{ matrix.service }}/coverage.xml
+        flags: ${{ matrix.service }}
+        name: ${{ matrix.service }}-coverage
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-${{ matrix.service }}
+        path: |
+          services/${{ matrix.service }}/test-results.xml
+          services/${{ matrix.service }}/htmlcov/
+          services/${{ matrix.service }}/bandit-report.json
+          services/${{ matrix.service }}/safety-report.json
+
+  # Connector golden tests
+  connector-compliance:
+    name: PMS Connector Compliance
+    runs-on: ubuntu-latest
+    needs: python-tests
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        pip install -r connectors/requirements.txt
+        pip install -r connectors/requirements-dev.txt
+
+    - name: Run golden contract tests
+      run: |
+        pytest connectors/tests/golden_contract -v \
+          --tb=short \
+          --junitxml=golden-contract-results.xml
+
+    - name: Validate capability matrix
+      run: |
+        python tools/validate-capabilities.py --all --strict
+
+    - name: Generate connector report
+      run: |
+        python tools/generate-connector-report.py > connector-compliance-report.md
+
+    - name: Upload compliance results
+      uses: actions/upload-artifact@v3
+      with:
+        name: connector-compliance
+        path: |
+          golden-contract-results.xml
+          connector-compliance-report.md
+
+  # GDPR compliance validation
+  gdpr-compliance:
+    name: GDPR Compliance Validation
+    runs-on: ubuntu-latest
+    needs: security-scan
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install Presidio
+      run: |
+        pip install presidio-analyzer presidio-anonymizer
+        python -m spacy download en_core_web_lg
+        pip install -r tools/requirements.txt
+
+    - name: PII detection scan
+      run: |
+        python tools/pii-scanner.py \
+          --path . \
+          --exclude-dirs .git,node_modules,__pycache__,venv \
+          --report pii-scan-report.json
+
+    - name: Validate GDPR configuration
+      run: |
+        python tools/validate-gdpr-config.py \
+          --config config/security/gdpr-config.yaml
+
+    - name: Check retention policies
+      run: |
+        python tools/check-retention-policies.py
+
+    - name: Generate compliance report
+      run: |
+        python tools/generate-gdpr-compliance-report.py > gdpr-compliance-report.md
+
+    - name: Upload compliance artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: gdpr-compliance
+        path: |
+          pii-scan-report.json
+          gdpr-compliance-report.md
+
+  # Infrastructure validation
+  validate-infrastructure:
+    name: Infrastructure as Code Validation
+    runs-on: ubuntu-latest
+    needs: security-scan
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+
+    - name: Terraform format check
+      run: |
+        cd infra/terraform
+        terraform fmt -check -recursive
+
+    - name: Terraform init
+      run: |
+        cd infra/terraform
+        terraform init -backend=false
+
+    - name: Terraform validate
+      run: |
+        cd infra/terraform
+        terraform validate
+
+    - name: Run Checkov
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: infra/terraform
+        framework: terraform
+        output_format: sarif
+        output_file_path: checkov-terraform.sarif
+        download_external_modules: true
+
+    - name: Upload Checkov results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: checkov-terraform.sarif
+
+    - name: Validate EU region compliance
+      run: |
+        cd infra/terraform
+        python ../../tools/validate-eu-regions.py .
+
+    - name: Validate Kubernetes manifests
+      run: |
+        wget -q https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+        tar xf kubeval-linux-amd64.tar.gz
+        sudo mv kubeval /usr/local/bin
+        find infra/k8s -name "*.yaml" -o -name "*.yml" | xargs kubeval --strict --kubernetes-version 1.28.0
+
+    - name: Validate Helm charts
+      run: |
+        curl -s https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        helm lint infra/helm/voicehive --strict
+
+    - name: OPA policy validation
+      run: |
+        wget -q https://github.com/open-policy-agent/opa/releases/latest/download/opa_linux_amd64
+        sudo mv opa_linux_amd64 /usr/local/bin/opa
+        sudo chmod +x /usr/local/bin/opa
+        find infra/k8s/gatekeeper -name "*.rego" -exec opa test {} \;
+
+  # Build and scan containers
+  build:
+    name: Build & Scan Containers
+    runs-on: ubuntu-latest
+    needs: [python-tests, connector-compliance, gdpr-compliance, validate-infrastructure]
+    strategy:
+      matrix:
+        service:
+        - name: orchestrator
+          context: ./services/orchestrator
+        - name: connectors
+          context: ./connectors
+        - name: compliance
+          context: ./services/compliance
+        - name: media-gateway
+          context: ./services/media
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tags: ${{ steps.meta.outputs.tags }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service.name }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build image for scanning
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ matrix.service.context }}
+        load: true
+        tags: ${{ matrix.service.name }}:scan
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Run Trivy container scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ matrix.service.name }}:scan
+        format: 'sarif'
+        output: 'trivy-${{ matrix.service.name }}.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '1'
+
+    - name: Upload Trivy results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-${{ matrix.service.name }}.sarif'
+        category: 'container-${{ matrix.service.name }}'
+
+    - name: Run Grype scan
+      uses: anchore/scan-action@v3
+      with:
+        image: ${{ matrix.service.name }}:scan
+        fail-build: true
+        severity-cutoff: high
+
+    - name: Build and push multi-arch
+      uses: docker/build-push-action@v5
+      if: github.event_name != 'pull_request'
+      with:
+        context: ${{ matrix.service.context }}
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          VCS_REF=${{ github.sha }}
+          VERSION=${{ steps.meta.outputs.version }}
+
+    - name: Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service.name }}:${{ steps.meta.outputs.version }}
+        format: spdx-json
+        output-file: sbom-${{ matrix.service.name }}.spdx.json
+
+    - name: Attest SBOM
+      uses: actions/attest-build-provenance@v1
+      if: github.event_name != 'pull_request'
+      with:
+        subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service.name }}
+        subject-digest: ${{ steps.meta.outputs.digest }}
+        push-to-registry: true
+
+    - name: Sign container
+      if: github.event_name != 'pull_request'
+      env:
+        COSIGN_EXPERIMENTAL: 1
+      run: |
+        cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service.name }}@${{ steps.meta.outputs.digest }}
+
+  # Integration tests
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up test environment
+      run: |
+        docker compose -f tests/integration/docker-compose.yml up -d
+        sleep 30
+
+    - name: Run integration tests
+      run: |
+        docker run --rm \
+          --network integration_test_network \
+          -e TEST_ENV=ci \
+          -v $PWD/tests:/tests \
+          ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/test-runner:latest \
+          pytest /tests/integration -v --tb=short
+
+    - name: Collect logs
+      if: always()
+      run: |
+        docker compose -f tests/integration/docker-compose.yml logs > integration-logs.txt
+
+    - name: Upload logs
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: integration-test-logs
+        path: integration-logs.txt
+
+  # Performance tests
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    needs: integration-tests
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run k6 performance tests
+      uses: grafana/k6-action@v0.3.0
+      with:
+        filename: tests/performance/load-test.js
+        flags: --out json=results.json
+
+    - name: Upload performance results
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-results
+        path: results.json
+
+  # Deploy to staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, integration-tests]
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment:
+      name: staging
+      url: https://staging.voicehive-hotels.eu
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --name voicehive-staging --region ${{ env.AWS_REGION }}
+
+    - name: Install ArgoCD CLI
+      run: |
+        curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+        chmod +x /usr/local/bin/argocd
+
+    - name: Deploy with ArgoCD
+      run: |
+        argocd app set voicehive-staging \
+          --helm-set global.image.tag=${{ needs.build.outputs.version }} \
+          --server ${{ secrets.ARGOCD_SERVER }} \
+          --auth-token ${{ secrets.ARGOCD_TOKEN }}
+        
+        argocd app sync voicehive-staging \
+          --server ${{ secrets.ARGOCD_SERVER }} \
+          --auth-token ${{ secrets.ARGOCD_TOKEN }} \
+          --timeout 600
+
+    - name: Wait for deployment
+      run: |
+        kubectl rollout status deployment/orchestrator -n voicehive-staging --timeout=10m
+        kubectl rollout status deployment/connectors -n voicehive-staging --timeout=10m
+
+    - name: Run smoke tests
+      run: |
+        ./scripts/smoke-tests.sh staging
+
+    - name: Run security scan on deployed env
+      run: |
+        python tools/security-scan-deployed.py --env staging
+
+  # Deploy to production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, integration-tests, performance-tests]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.environment == 'production'
+    environment:
+      name: production
+      url: https://api.voicehive-hotels.eu
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_PROD_ROLE_TO_ASSUME }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Create deployment record
+      run: |
+        echo '{
+          "version": "${{ needs.build.outputs.version }}",
+          "commit": "${{ github.sha }}",
+          "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
+          "actor": "${{ github.actor }}",
+          "run_id": "${{ github.run_id }}"
+        }' > deployment.json
+        aws s3 cp deployment.json s3://voicehive-deployments/pending/
+
+    - name: Backup current state
+      run: |
+        ./scripts/backup-production.sh
+
+    - name: Deploy with blue-green strategy
+      run: |
+        ./scripts/blue-green-deploy.sh \
+          --version ${{ needs.build.outputs.version }} \
+          --environment production \
+          --timeout 20m
+
+    - name: Run production validation
+      run: |
+        ./scripts/production-validation.sh \
+          --comprehensive \
+          --security-scan \
+          --performance-check
+
+    - name: Update deployment record
+      if: success()
+      run: |
+        aws s3 mv s3://voicehive-deployments/pending/deployment.json \
+                  s3://voicehive-deployments/completed/
+
+    - name: Rollback on failure
+      if: failure()
+      run: |
+        ./scripts/rollback-production.sh
+
+  # Post-deployment monitoring
+  post-deploy-monitoring:
+    name: Post-Deployment Monitoring
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    if: always() && (needs.deploy-staging.result == 'success' || needs.deploy-production.result == 'success')
+    steps:
+    - name: Monitor error rates
+      run: |
+        ./scripts/monitor-deployment.sh \
+          --duration 30m \
+          --alert-threshold 5
+
+    - name: Generate deployment report
+      run: |
+        ./scripts/generate-deployment-report.sh > deployment-report.md
+
+    - name: Upload report
+      uses: actions/upload-artifact@v3
+      with:
+        name: deployment-report
+        path: deployment-report.md
+
+  # Notification
+  notify:
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    needs: [build, deploy-staging, deploy-production]
+    if: always()
+    steps:
+    - name: Slack notification
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        text: |
+          Pipeline Status: ${{ job.status }}
+          Commit: ${{ github.event.head_commit.message }}
+          Author: ${{ github.actor }}
+          Version: ${{ needs.build.outputs.version }}
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}

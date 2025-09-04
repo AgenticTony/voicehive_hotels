@@ -17,7 +17,7 @@ from .factory import (
     ConnectorFactory,
     ConnectorRegistry,
     ConnectorStatus,
-    ConnectorMetadata
+    ConnectorMetadata,
 )
 
 from .contracts import (
@@ -36,7 +36,7 @@ from .contracts import (
     GuestProfile,
     ReservationDraft,
     ReservationPatch,
-    Reservation
+    Reservation,
 )
 
 __all__ = [
@@ -66,7 +66,7 @@ __all__ = [
     # Domain models
     "RoomType",
     "AvailabilityGrid",
-    "RateQuote", 
+    "RateQuote",
     "GuestProfile",
     "ReservationDraft",
     "ReservationPatch",

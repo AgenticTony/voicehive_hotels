@@ -1,0 +1,49 @@
+# LiveKit Agent Configuration
+agent:
+  name: "voicehive-sip-agent"
+  version: "1.0.0"
+  
+# LiveKit connection settings
+livekit:
+  # Project-specific URL from LiveKit Cloud dashboard
+  # For local development: ws://localhost:7880
+  url: "${LIVEKIT_URL:-wss://<project>.livekit.cloud}"
+  api_key: "${LIVEKIT_API_KEY}"
+  api_secret: "${LIVEKIT_API_SECRET}"
+  
+  # SIP region configuration (for Cloud deployments)
+  # Region-based SIP endpoint: {sip_subdomain}.{region}.sip.livekit.cloud
+  sip_region: "${LIVEKIT_SIP_REGION:-eu}"  # eu, us, sa, india
+  
+# Audio processing settings
+audio:
+  sample_rate: 16000  # 16kHz for telephony
+  channels: 1  # Mono for SIP
+  frame_size_ms: 20  # 20ms frames
+  
+# ASR settings
+asr:
+  language: "en"  # Default language
+  supported_languages:
+    - "en"  # English
+    - "de"  # German
+    - "es"  # Spanish
+    - "fr"  # French
+    - "it"  # Italian
+  
+# Webhook settings
+webhooks:
+  orchestrator_url: "${ORCHESTRATOR_URL:-http://orchestrator:8080}"
+  timeout_seconds: 5
+  retry_attempts: 3
+  webhook_secret: "${LIVEKIT_WEBHOOK_KEY}"  # For webhook signature validation
+  
+# Performance settings
+performance:
+  max_concurrent_calls: 10
+  audio_buffer_size_ms: 100
+  
+# Logging
+logging:
+  level: "${LOG_LEVEL:-INFO}"
+  format: "json"

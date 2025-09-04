@@ -34,17 +34,17 @@ VoiceHive Hotels uses a **partner-ready architecture** where 80% of integration 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │ Caller (PSTN)   │────▶│ Media Layer     │────▶│ AI Layer        │
-│                 │     │ - LiveKit       │     │ - NVIDIA Riva   │
-└─────────────────┘     │ - Twilio        │     │ - Azure OpenAI  │
-                        └─────────────────┘     │ - ElevenLabs    │
+│                 │     │ - LiveKit Cloud │     │ - Riva ASR      │
+└─────────────────┘     │ - SIP/WebRTC    │     │ - Azure OpenAI  │
+                        └─────────────────┘     │ - TTS Router    │
                                                 └─────────────────┘
                                                          │
                         ┌─────────────────────────────────┘
                         ▼
                 ┌───────────────────┐
                 │   Orchestrator    │
-                │ - Never vendor-   │
-                │   specific        │
+                │ - Call Flow       │
+                │ - Function Calling│
                 └───────┬───────────┘
                         │
                         ▼
@@ -54,12 +54,25 @@ VoiceHive Hotels uses a **partner-ready architecture** where 80% of integration 
                 │ - Golden Tests    │         │ - EU Regions     │
                 └───────┬───────────┘         └──────────────────┘
                         │
-        ┌───────────────┼───────────────┬─────────────┬────────────┐
+        ┌───────────────│───────────────┬─────────────┬────────────┐
         ▼               ▼               ▼             ▼            ▼
    ┌─────────┐    ┌─────────┐    ┌──────────┐  ┌─────────┐  ┌───────────┐
    │ Apaleo  │    │  Mews   │    │ Cloudbeds│  │  Opera  │  │SiteMinder │
    └─────────┘    └─────────┘    └──────────┘  └─────────┘  └───────────┘
 ```
+
+## 📊 Sprint 1 Progress (60% Complete)
+
+### Completed in Sprint 1:
+- **LiveKit Agent**: Full SIP participant handling and webhook integration
+- **Riva ASR Proxy**: NVIDIA client with streaming WebSocket transcription
+- **Orchestrator AI**: Azure OpenAI GPT-4 with PMS function calling
+- **TTS Router Service**: Complete microservice with ElevenLabs integration
+
+### Next Steps:
+- Deploy GPU nodes for Riva server
+- Integration testing of voice pipeline
+- Load testing with concurrent calls
 
 ## 🌟 Key Features
 
@@ -91,19 +104,21 @@ See [Capability Matrix](connectors/capability_matrix.yaml) for detailed feature 
 
 ## 🛠️ Technology Stack
 
-- **Media**: LiveKit Cloud (WebRTC SFU)
+- **Media**: LiveKit Cloud (WebRTC SFU) - ✅ Agent implemented
 - **Telephony**: Twilio SIP Trunking  
-- **Speech Recognition**: NVIDIA Riva Enterprise
-- **Language Models**: Azure OpenAI (GPT-4o)
-- **Text-to-Speech**: ElevenLabs Turbo v2
+- **Speech Recognition**: NVIDIA Riva Enterprise - ✅ Streaming/offline ASR ready
+- **Language Models**: Azure OpenAI GPT-4 - ✅ Function calling integrated
+- **Text-to-Speech**: ElevenLabs Turbo v2 + Azure Speech - ✅ TTS Router ready
 - **Infrastructure**: Kubernetes (EKS), Terraform
 - **Monitoring**: Prometheus, Grafana, Datadog
 
 ## 📚 Documentation
 
 - [WARP.md](WARP.md) - Development guidelines and standards
+- [Connectors WARP.md](connectors/WARP.md) - 🆕 Comprehensive development guide with MCP workflow
 - [Architecture](docs/architecture/) - System design and decisions
-- [Sprint Status](docs/sprints/sprint-0-status.md) - Current Sprint 0 (80% complete)
+- [Sprint Status](docs/sprints/sprint-1-status.md) - Sprint 1 In Progress! (60%)
+- [Sprint 1 Plan](docs/sprints/sprint-1-plan.md) - Core voice pipeline objectives
 - [Partner Integration](docs/partners/) - How to add new PMS
 - [Security](docs/security/) - GDPR compliance and security policies
 - [Connector SDK](connectors/README.md) - PMS integration framework
@@ -199,14 +214,18 @@ This is proprietary software. See [LICENSE](LICENSE) for details.
 
 ## 🏗️ Development Status
 
-**Current Sprint**: Sprint 0 - Foundation & Partner SDK (Day 4/5)
-- ✅ PMS Connector Framework (100%)
-- ✅ Apaleo Integration (100%)
-- ✅ Security Policies (100%)
-- 🔄 Infrastructure (70%)
-- 🔄 CI/CD Pipeline (40%)
+**Current Sprint**: Sprint 1 - Core Voice Pipeline (Day 1/5)
+- 🔄 LiveKit Cloud Setup (0%) - EU region configuration
+- 🔄 NVIDIA Riva ASR (0%) - Multilingual speech recognition
+- 🔄 Orchestrator Logic (0%) - Call flow coordination
+- 🔄 LLM Integration (0%) - Azure OpenAI GPT-4
+- 🔄 TTS Integration (0%) - ElevenLabs + fallback
+- 🔄 Barge-in Support (0%) - Call interruption handling
+
+**Sprint 1 Goal**: First successful multilingual AI call with PMS lookup!
 
 See [Sprint 0 Status](docs/sprints/sprint-0-status.md) for detailed progress.
+See [Sprint 0 Quick Reference](docs/SPRINT_0_QUICK_REF.md) for today's accomplishments.
 
 ---
 

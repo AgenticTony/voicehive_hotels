@@ -1,0 +1,213 @@
+# VoiceHive Hotels GDPR Configuration
+# This file controls data residency, retention, and privacy settings
+
+# Data Residency Configuration
+regions:
+  allowed:
+    - eu-west-1      # Ireland
+    - eu-central-1   # Frankfurt
+    - europe-west1   # Belgium (GCP)
+    - westeurope     # Netherlands (Azure)
+  
+  # Service-specific region pinning
+  services:
+    livekit:
+      region: eu-west-1
+      enforce_pinning: true
+      monitoring_tag: "livekit_region"
+    
+    twilio:
+      edge_locations:
+        - frankfurt
+        - dublin
+      sip_termination_region: EU
+      monitoring_tag: "twilio_edge"
+    
+    azure_openai:
+      deployment_region: westeurope
+      resource_group: "voicehive-eu-prod"
+      monitoring_tag: "llm_region"
+    
+    elevenlabs:
+      zero_retention_mode: true
+      api_region: eu
+      monitoring_tag: "tts_region"
+
+# Retention Policies
+retention:
+  defaults:
+    audio_recordings:
+      days: 30
+      format: "encrypted_wav"
+      storage_class: "GLACIER_IR"  # S3 Instant Retrieval
+    
+    transcripts:
+      days: 90
+      format: "json"
+      pii_redacted: true
+      storage_class: "STANDARD_IA"
+    
+    metadata:
+      days: 365
+      format: "json"
+      fields:
+        - call_id
+        - timestamp
+        - duration
+        - language
+        - hotel_id
+        - call_type
+  
+  # Per-industry overrides
+  industry_overrides:
+    banking:
+      audio_recordings:
+        days: 2555  # 7 years
+        compliance_tag: "MiFID II"
+    
+    insurance:
+      audio_recordings:
+        days: 1825  # 5 years
+        compliance_tag: "Solvency II"
+    
+    healthcare:
+      audio_recordings:
+        days: 3650  # 10 years
+        compliance_tag: "HIPAA"
+
+# Lawful Basis Configuration
+lawful_basis:
+  call_handling:
+    basis: "legitimate_interests"
+    assessment_required: true
+    notice_languages: ["en", "de", "fr", "es", "it", "pt", "nl", "pl"]
+    
+  call_recording:
+    basis: "legitimate_interests"
+    alternative_basis: "consent"
+    notice_required: true
+    opt_out_available: true
+    
+  voice_cloning:
+    basis: "explicit_consent"
+    double_opt_in: true
+    consent_storage:
+      - timestamp
+      - ip_address
+      - voice_sample_hash
+      - consent_version
+      - withdrawal_method
+
+# PII Handling
+pii_handling:
+  detection_engine: "presidio"
+  
+  categories:
+    high_sensitivity:
+      - credit_card
+      - ssn
+      - passport
+      - bank_account
+      action: "redact"
+    
+    medium_sensitivity:
+      - email
+      - phone_number
+      - room_number
+      - name
+      action: "pseudonymize"
+    
+    low_sensitivity:
+      - hotel_name
+      - city
+      - date
+      action: "retain"
+  
+  redaction_config:
+    replacement_char: "*"
+    hash_algorithm: "sha256"
+    salt_rotation_days: 90
+
+# Data Subject Rights
+dsar:
+  response_time_days: 30
+  
+  automated_actions:
+    - data_export
+    - transcript_retrieval
+    - recording_retrieval
+    - consent_history
+  
+  manual_review_required:
+    - data_deletion
+    - processing_restriction
+    - data_portability
+  
+  verification_required: true
+  verification_methods:
+    - email_confirmation
+    - phone_callback
+    - reservation_details
+
+# Security Controls
+security:
+  encryption:
+    at_rest:
+      algorithm: "AES-256-GCM"
+      key_management: "AWS KMS"
+      key_rotation_days: 90
+    
+    in_transit:
+      min_tls_version: "1.2"
+      cipher_suites:
+        - "TLS_AES_128_GCM_SHA256"
+        - "TLS_AES_256_GCM_SHA384"
+        - "TLS_CHACHA20_POLY1305_SHA256"
+  
+  access_control:
+    mfa_required: true
+    session_timeout_minutes: 30
+    ip_allowlist_enabled: false
+    
+  audit_logging:
+    enabled: true
+    retention_days: 2555  # 7 years
+    immutable_storage: true
+    events:
+      - data_access
+      - data_modification
+      - data_deletion
+      - consent_change
+      - admin_action
+
+# Monitoring & Alerts
+monitoring:
+  non_eu_traffic_alert:
+    enabled: true
+    threshold: 0
+    notification_channels:
+      - pagerduty
+      - security_team_email
+  
+  retention_violation_alert:
+    enabled: true
+    check_frequency: "daily"
+    
+  consent_expiry_alert:
+    enabled: true
+    days_before_expiry: 30
+
+# Compliance Documentation
+compliance:
+  dpia_location: "docs/compliance/dpia_voice_processing.pdf"
+  lia_template: "docs/compliance/lia_template.docx"
+  ropa_location: "docs/compliance/records_of_processing.xlsx"
+  
+  certifications:
+    - iso27001
+    - soc2_type2
+    - pci_dss_level1
+  
+  audit_schedule:
+    internal: "quarterly"
+    external: "annually"

@@ -55,33 +55,61 @@ services/orchestrator/Dockerfile
 services/connectors/Dockerfile
 ```
 
-## In Progress 🔄
+### 5. Service Metrics & Health
+```text
+# Orchestrator
+- GET /metrics           # Prometheus exposition via prometheus_client
+- GET /health            # Basic service health
+- GET /health/live       # Liveness probe
+- GET /health/ready      # Readiness probe
+- GET /health/metrics    # Component gauges (vault, connectors, etc.)
+- GET /health/vault      # Vault-specific health
+```
 
-### Terraform Infrastructure (70%)
-**Owner**: [Needs assignment]
+## Today's Updates (Day 5) - FINAL DAY! 🚀
+
+### Morning Accomplishments ✅
+- **Terraform Infrastructure (100%)**: Complete EKS module with GPU nodes, RDS, ElastiCache, S3 buckets
+- **Environment configurations**: Created development, staging, and production tfvars
+- **Terraform backend**: Bootstrap script for S3 state management with GDPR compliance
+- **Monitoring Stack**: Deployed Prometheus + Grafana with custom VoiceHive dashboards
+- **PII Scanner Tool**: Implemented with Microsoft Presidio + EU-specific patterns
+
+### Completed Infrastructure
 ```bash
-# What's done
 infra/terraform/
-├── main.tf         # Basic structure
-└── variables.tf    # EU regions
+├── main.tf                    # Complete EKS, RDS, Redis, S3
+├── variables.tf               # EU regions, GDPR constraints
+├── backend.tf                 # S3 state management
+├── bootstrap-backend.sh       # State backend setup
+└── environments/
+    ├── development.tfvars     # Dev environment config
+    ├── staging.tfvars         # Staging config
+    └── production.tfvars      # Production config
 
-# TODO
-- [ ] Complete EKS module
-- [ ] RDS with encryption
-- [ ] S3 compliance buckets
+infra/helm/monitoring/
+├── prometheus-stack-values.yaml  # Monitoring configuration
+└── deploy-monitoring.sh          # Deployment script
 ```
 
-### PII Scanner Tool
-**Owner**: [Needs assignment]
+### PII Scanner Tool ✅
 ```bash
-# Design ready, needs implementation
-tools/pii-scanner.py  # TODO
+tools/
+├── pii-scanner.py              # Complete implementation
+└── requirements-pii-scanner.txt # Dependencies
 
-# Will use:
-- Microsoft Presidio
-- Custom EU patterns
-- Log scanning integration
+# Features:
+- Microsoft Presidio integration
+- EU-specific patterns (IBAN, EU phones, VAT, passports)
+- GDPR compliance reporting
+- Log and directory scanning
 ```
+
+## Day 4 Updates
+- Vault v2 enhancements (audit devices, token renewal, health checks)
+- PII redaction integration in logging across services/connectors
+- Health monitoring endpoints exposed (/metrics, /health/*)
+- WARP.md (root and connectors/) created/updated with MCP workflow
 
 ## Key Files to Know 📁
 
@@ -129,16 +157,20 @@ kubectl get all -n voicehive
 - [x] Capability matrix
 - [x] Golden contract tests
 - [x] Security policies (Gatekeeper)
-- [x] Vault configuration
+- [x] Vault configuration (v2 with enhanced features)
 - [x] CI/CD pipeline
 - [x] GDPR documentation
 - [x] Compliance evidence script
+- [x] PII redaction in logging framework
+- [x] Health monitoring endpoints
+- [x] WARP.md documentation (with MCP workflow)
+- [x] Complete Terraform EKS module
+- [x] Deploy monitoring stack (Prometheus + Grafana)
+- [x] Implement PII scanner (Presidio + EU patterns)
 
-### TODO by EOD Day 5
-- [ ] Complete Terraform EKS module
-- [ ] Deploy monitoring stack
-- [ ] Implement PII scanner
+### Remaining by EOD Day 5
 - [ ] Run E2E integration test
+- [ ] Update main README.md
 - [ ] Sprint retrospective
 
 ## Key Contacts 🤝

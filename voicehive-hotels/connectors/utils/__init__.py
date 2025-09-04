@@ -7,7 +7,7 @@ from .pii_redactor import (
     PIIRedactorFilter,
     get_default_redactor,
     redact_pii,
-    setup_logging_redaction
+    setup_logging_redaction,
 )
 
 from .logging import (
@@ -15,7 +15,7 @@ from .logging import (
     StructuredFormatter,
     log_performance,
     sanitize_url,
-    correlation_id
+    correlation_id,
 )
 
 from .vault_client import (
@@ -25,13 +25,13 @@ from .vault_client import (
     get_vault_client,
     VaultError,
     VaultAuthError,
-    VaultSecretNotFoundError
+    VaultSecretNotFoundError,
 )
 
 __all__ = [
     # PII Redaction
     "PIIRedactor",
-    "PIIRedactorFilter", 
+    "PIIRedactorFilter",
     "get_default_redactor",
     "redact_pii",
     "setup_logging_redaction",
@@ -48,5 +48,5 @@ __all__ = [
     "get_vault_client",
     "VaultError",
     "VaultAuthError",
-    "VaultSecretNotFoundError"
+    "VaultSecretNotFoundError",
 ]

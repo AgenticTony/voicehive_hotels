@@ -1,0 +1,200 @@
+# VoiceHive Hotels - Service Dockerfile Template
+# Security-hardened multi-stage build with comprehensive scanning
+
+# Build-time arguments
+ARG PYTHON_VERSION=3.11.6
+ARG NODE_VERSION=18-alpine
+ARG GO_VERSION=1.21-alpine
+
+# ==============================================================================
+# Python Service Template
+# ==============================================================================
+
+# Build stage
+FROM python:${PYTHON_VERSION}-alpine as python-builder
+
+# Install build dependencies minimally
+RUN apk add --no-cache --virtual .build-deps \
+    gcc \
+    musl-dev \
+    libffi-dev \
+    openssl-dev \
+    python3-dev \
+    && apk add --no-cache \
+    git \
+    openssh-client
+
+WORKDIR /build
+
+# Create and activate virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Upgrade pip to latest stable
+RUN pip install --upgrade --no-cache-dir pip setuptools wheel
+
+# Install requirements (leveraging Docker cache)
+COPY requirements*.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Clean up build dependencies
+RUN apk del .build-deps
+
+# ==============================================================================
+# Security Scanning Stage
+# ==============================================================================
+
+FROM aquasec/trivy:latest as security-scanner
+
+# Copy artifacts to scan
+COPY --from=python-builder /opt/venv /opt/venv
+WORKDIR /scan
+
+# Run comprehensive security scan
+RUN trivy fs --no-progress \
+    --security-checks vuln,config,secret \
+    --exit-code 1 \
+    --severity CRITICAL,HIGH \
+    --ignore-unfixed \
+    /opt/venv
+
+# ==============================================================================
+# SBOM Generation Stage
+# ==============================================================================
+
+FROM anchore/syft:latest as sbom-generator
+
+COPY --from=python-builder /opt/venv /opt/venv
+RUN syft packages /opt/venv -o spdx-json=/sbom.json
+
+# ==============================================================================
+# Production Runtime - Distroless
+# ==============================================================================
+
+FROM gcr.io/distroless/python3-debian12:nonroot
+
+# Metadata labels
+LABEL maintainer="security@voicehive-hotels.eu"
+LABEL org.opencontainers.image.source="https://github.com/voicehive/hotels"
+LABEL org.opencontainers.image.vendor="VoiceHive Hotels"
+LABEL org.opencontainers.image.title="VoiceHive Service"
+LABEL org.opencontainers.image.licenses="Proprietary"
+
+# Copy Python environment
+COPY --from=python-builder /opt/venv /opt/venv
+COPY --from=sbom-generator /sbom.json /sbom.json
+
+# Copy application code
+WORKDIR /app
+COPY --chown=nonroot:nonroot . .
+
+# Set secure environment
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONHASHSEED=random \
+    PYTHONUTF8=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Security headers and settings
+ENV SECURE_SSL_REDIRECT=true \
+    SECURE_HSTS_SECONDS=31536000 \
+    SECURE_HSTS_INCLUDE_SUBDOMAINS=true \
+    SECURE_FRAME_DENY=true \
+    SECURE_CONTENT_TYPE_NOSNIFF=true \
+    SECURE_BROWSER_XSS_FILTER=true \
+    SESSION_COOKIE_SECURE=true \
+    SESSION_COOKIE_HTTPONLY=true \
+    SESSION_COOKIE_SAMESITE=Strict
+
+# Runtime user (nonroot in distroless)
+USER nonroot
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+
+# Default port
+EXPOSE 8080
+
+# Entrypoint
+ENTRYPOINT ["python"]
+CMD ["-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
+
+# ==============================================================================
+# Node.js Service Template (commented out, uncomment as needed)
+# ==============================================================================
+
+# FROM node:${NODE_VERSION} as node-builder
+# 
+# WORKDIR /build
+# 
+# # Install dependencies with lockfile
+# COPY package*.json yarn.lock* pnpm-lock.yaml* ./
+# RUN npm ci --only=production || \
+#     yarn install --frozen-lockfile --production || \
+#     pnpm install --frozen-lockfile --prod
+# 
+# # Copy source
+# COPY . .
+# 
+# # Build if needed
+# RUN npm run build || yarn build || pnpm build || true
+# 
+# # Production stage
+# FROM gcr.io/distroless/nodejs18-debian12:nonroot
+# 
+# COPY --from=node-builder /build/node_modules ./node_modules
+# COPY --from=node-builder /build/dist ./dist
+# 
+# USER nonroot
+# EXPOSE 3000
+# CMD ["dist/index.js"]
+
+# ==============================================================================
+# Go Service Template (commented out, uncomment as needed)
+# ==============================================================================
+
+# FROM golang:${GO_VERSION} as go-builder
+# 
+# WORKDIR /build
+# 
+# # Copy go mod files
+# COPY go.mod go.sum ./
+# RUN go mod download
+# 
+# # Copy source
+# COPY . .
+# 
+# # Build statically linked binary
+# RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+#     -ldflags="-w -s -X main.version=${VERSION}" \
+#     -a -installsuffix cgo -o app .
+# 
+# # Production stage - scratch for minimal size
+# FROM scratch
+# 
+# COPY --from=go-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+# COPY --from=go-builder /build/app /app
+# 
+# USER 65534:65534
+# EXPOSE 8080
+# ENTRYPOINT ["/app"]
+
+# ==============================================================================
+# Build Arguments for CI/CD
+# ==============================================================================
+
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+LABEL org.opencontainers.image.version="${VERSION}"
+
+# Security scanning results
+LABEL security.scan.date="${BUILD_DATE}"
+LABEL security.scan.tool="trivy"
+LABEL security.sbom="/sbom.json"
