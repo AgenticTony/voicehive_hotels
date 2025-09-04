@@ -1,0 +1,56 @@
+apiVersion: v2
+name: voicehive
+description: VoiceHive Hotels - Multilingual AI Receptionist Platform
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - voip
+  - ai
+  - hospitality
+  - pms
+home: https://voicehive-hotels.com
+sources:
+  - https://github.com/voicehive/hotels
+maintainers:
+  - name: Platform Team
+    email: platform@voicehive-hotels.com
+icon: https://voicehive-hotels.com/logo.png
+
+dependencies:
+  - name: redis
+    version: "18.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled
+    
+  - name: postgresql
+    version: "13.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
+    
+  - name: prometheus
+    version: "25.x.x"
+    repository: "https://prometheus-community.github.io/helm-charts"
+    condition: monitoring.enabled
+    
+  - name: grafana
+    version: "7.x.x"
+    repository: "https://grafana.github.io/helm-charts"
+    condition: monitoring.enabled
+    
+  - name: loki
+    version: "5.x.x"
+    repository: "https://grafana.github.io/helm-charts"
+    condition: monitoring.enabled
+
+annotations:
+  # Chart deployment annotations
+  "artifacthub.io/changes": |
+    - kind: added
+      description: Initial release with partner-ready PMS connectors
+    - kind: added
+      description: GDPR compliance with EU region pinning
+    - kind: added
+      description: Multi-language support (25 EU languages)
+  "artifacthub.io/containsSecurityUpdates": "false"
+  "artifacthub.io/prerelease": "false"

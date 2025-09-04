@@ -1,0 +1,241 @@
+# VoiceHive Hotels PMS Capability Matrix
+# Defines what each PMS vendor supports and limitations
+
+vendors:
+  apaleo:
+    display_name: "Apaleo"
+    api_type: "REST"
+    oauth: true
+    capabilities:
+      availability: true
+      rates: true
+      reservations: true
+      modify_reservation: true
+      cancel_reservation: true
+      guest_profiles: true
+      webhooks: true
+      real_time_sync: true
+      multi_property: true
+      payment_processing: false
+      housekeeping: true
+      pos_integration: false
+    
+    rate_limits:
+      requests_per_second: 10
+      burst_limit: 50
+      daily_quota: 100000
+    
+    constraints:
+      max_date_range_days: 365
+      max_rooms_per_query: 50
+      requires_rate_code: false
+      supports_partial_modify: true
+    
+    regions:
+      - eu-central-1
+      - us-east-1
+    
+    certification_required: false
+    sandbox_available: true
+    
+  mews:
+    display_name: "Mews"
+    api_type: "REST"
+    oauth: true
+    capabilities:
+      availability: true
+      rates: true
+      reservations: true
+      modify_reservation: true
+      cancel_reservation: true
+      guest_profiles: true
+      webhooks: true
+      real_time_sync: true
+      multi_property: true
+      payment_processing: true
+      housekeeping: true
+      pos_integration: true
+    
+    rate_limits:
+      requests_per_second: 5
+      burst_limit: 20
+      daily_quota: 50000
+    
+    constraints:
+      max_date_range_days: 365
+      max_rooms_per_query: 100
+      requires_rate_code: true
+      supports_partial_modify: true
+    
+    regions:
+      - eu-west-1
+      - us-east-1
+      - ap-southeast-1
+    
+    certification_required: true
+    sandbox_available: true
+    marketplace_listing: true
+    
+  cloudbeds:
+    display_name: "Cloudbeds"
+    api_type: "REST"
+    oauth: true
+    capabilities:
+      availability: true
+      rates: true
+      reservations: true
+      modify_reservation: partial  # Limited modification support
+      cancel_reservation: true
+      guest_profiles: true
+      webhooks: limited  # Not all events supported
+      real_time_sync: false
+      multi_property: true
+      payment_processing: true
+      housekeeping: true
+      pos_integration: false
+    
+    rate_limits:
+      requests_per_second: 3
+      burst_limit: 10
+      daily_quota: 25000
+    
+    constraints:
+      max_date_range_days: 180
+      max_rooms_per_query: 20
+      requires_rate_code: true
+      supports_partial_modify: false
+    
+    regions:
+      - us-west-1
+      - eu-central-1
+    
+    certification_required: true
+    sandbox_available: true
+    partner_program: true
+    
+  opera:
+    display_name: "Oracle OPERA (OHIP)"
+    api_type: "REST"
+    oauth: true
+    capabilities:
+      availability: true
+      rates: true
+      reservations: true
+      modify_reservation: true
+      cancel_reservation: true
+      guest_profiles: true
+      webhooks: varies  # Depends on deployment
+      real_time_sync: true
+      multi_property: true
+      payment_processing: true
+      housekeeping: true
+      pos_integration: true
+    
+    rate_limits:
+      requests_per_second: 10
+      burst_limit: 50
+      daily_quota: null  # No hard limit, varies by contract
+    
+    constraints:
+      max_date_range_days: 730
+      max_rooms_per_query: 100
+      requires_rate_code: true
+      supports_partial_modify: true
+      requires_hotel_code: true
+    
+    regions:
+      - global  # Varies by hotel deployment
+    
+    certification_required: true
+    sandbox_available: true
+    sandbox_hotel_code: "SAND01"
+    partner_store: true
+    
+  siteminder:
+    display_name: "SiteMinder Exchange"
+    api_type: "SOAP"  # Also supports REST for some operations
+    oauth: false  # Uses API keys
+    capabilities:
+      availability: true
+      rates: true
+      reservations: true
+      modify_reservation: by_api  # Depends on connected PMS
+      cancel_reservation: true
+      guest_profiles: via_pms  # Limited direct support
+      webhooks: varies
+      real_time_sync: true
+      multi_property: true
+      payment_processing: false
+      housekeeping: false
+      pos_integration: false
+    
+    rate_limits:
+      requests_per_second: 2
+      burst_limit: 5
+      daily_quota: 10000
+    
+    constraints:
+      max_date_range_days: 365
+      max_rooms_per_query: 50
+      requires_rate_code: true
+      supports_partial_modify: false
+      uses_ota_standards: true  # OTA XML messages
+    
+    regions:
+      - ap-southeast-2
+      - eu-west-1
+      - us-east-1
+    
+    certification_required: true
+    sandbox_available: true
+    exchange_partner: true
+
+# Feature explanations for documentation
+feature_definitions:
+  availability: "Check room inventory for date ranges"
+  rates: "Query room rates and pricing"
+  reservations: "Create new bookings"
+  modify_reservation: "Change existing bookings (dates, room type, etc)"
+  cancel_reservation: "Cancel bookings with reason codes"
+  guest_profiles: "Store and retrieve guest preferences and history"
+  webhooks: "Real-time event notifications"
+  real_time_sync: "Immediate inventory updates"
+  multi_property: "Manage multiple hotels in one account"
+  payment_processing: "Handle payment transactions"
+  housekeeping: "Room status and cleaning schedules"
+  pos_integration: "Connect to point-of-sale systems"
+
+# API type definitions
+api_types:
+  REST:
+    description: "Modern JSON-based APIs"
+    complexity: low
+    performance: high
+  SOAP:
+    description: "XML-based web services"
+    complexity: high
+    performance: medium
+  
+# Region mapping for GDPR compliance
+region_compliance:
+  eu-west-1:
+    gdpr_compliant: true
+    data_residency: "Ireland"
+  eu-central-1:
+    gdpr_compliant: true
+    data_residency: "Frankfurt"
+  us-east-1:
+    gdpr_compliant: false
+    data_residency: "Virginia"
+  us-west-1:
+    gdpr_compliant: false
+    data_residency: "California"
+  ap-southeast-1:
+    gdpr_compliant: false
+    data_residency: "Singapore"
+  ap-southeast-2:
+    gdpr_compliant: false
+    data_residency: "Sydney"
+  global:
+    gdpr_compliant: varies
+    data_residency: "Depends on deployment"

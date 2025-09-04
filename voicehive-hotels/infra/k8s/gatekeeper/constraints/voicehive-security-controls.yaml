@@ -1,0 +1,338 @@
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredSecurityControls
+metadata:
+  name: voicehive-security-controls
+  annotations:
+    description: "Enforces VoiceHive Hotels security requirements for all workloads"
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+    - apiGroups: ["apps"]
+      kinds: 
+      - Deployment
+      - StatefulSet
+      - DaemonSet
+    - apiGroups: ["batch"]
+      kinds:
+      - Job
+      - CronJob
+    - apiGroups: [""]
+      kinds:
+      - Pod
+    namespaces:
+    - "voicehive-production"
+    - "voicehive-staging"
+    - "voicehive-dev"
+    excludedNamespaces:
+    - "kube-system"
+    - "kube-public"
+    - "gatekeeper-system"
+  parameters:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    requiredDropCapabilities:
+    - "ALL"
+    allowedCapabilities:
+    - "NET_BIND_SERVICE"  # For services that need to bind to ports < 1024
+    - "IPC_LOCK"          # For Vault
+    allowedUsers:
+    - 100    # Vault user
+    - 1000   # Default non-root user
+    - 65534  # Nobody user
+    allowedGroups:
+    - 100    # Users group
+    - 1000   # App group
+    - 65534  # Nogroup
+
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredresources
+  annotations:
+    description: "Requires resource requests and limits for all containers"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredResources
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            exemptImages:
+              description: "List of exempt container images"
+              type: array
+              items:
+                type: string
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package k8srequiredresources
+
+      import future.keywords.contains
+      import future.keywords.if
+
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        not exempt(container.image)
+        not container.resources.requests.memory
+        msg := sprintf("container %s is missing memory request", [container.name])
+      }
+
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        not exempt(container.image)
+        not container.resources.requests.cpu
+        msg := sprintf("container %s is missing CPU request", [container.name])
+      }
+
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        not exempt(container.image)
+        not container.resources.limits.memory
+        msg := sprintf("container %s is missing memory limit", [container.name])
+      }
+
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        not exempt(container.image)
+        not container.resources.limits.cpu
+        msg := sprintf("container %s is missing CPU limit", [container.name])
+      }
+
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.initContainers[_]
+        not exempt(container.image)
+        not container.resources.requests.memory
+        msg := sprintf("init container %s is missing memory request", [container.name])
+      }
+
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.initContainers[_]
+        not exempt(container.image)
+        not container.resources.limits.memory
+        msg := sprintf("init container %s is missing memory limit", [container.name])
+      }
+
+      exempt(image) {
+        input.parameters.exemptImages[_] == image
+      }
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredResources
+metadata:
+  name: voicehive-resource-requirements
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+    - apiGroups: ["apps"]
+      kinds: 
+      - Deployment
+      - StatefulSet
+      - DaemonSet
+    - apiGroups: ["batch"]
+      kinds:
+      - Job
+      - CronJob
+    - apiGroups: [""]
+      kinds:
+      - Pod
+    namespaces:
+    - "voicehive-production"
+    - "voicehive-staging"
+    excludedNamespaces:
+    - "kube-system"
+    - "kube-public"
+  parameters:
+    exemptImages:
+    - "gcr.io/google_containers/pause"
+
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: k8seuregiononly
+  annotations:
+    description: "Ensures workloads only run in EU regions for GDPR compliance"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sEURegionOnly
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            allowedRegions:
+              description: "List of allowed EU regions"
+              type: array
+              items:
+                type: string
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package k8seuregiononly
+
+      import future.keywords.contains
+      import future.keywords.if
+
+      violation[{"msg": msg}] {
+        # Check node selector
+        selector := input.review.object.spec.nodeSelector
+        region := selector["topology.kubernetes.io/region"]
+        not contains(input.parameters.allowedRegions, region)
+        msg := sprintf("nodeSelector region %s is not in allowed EU regions: %v", [region, input.parameters.allowedRegions])
+      }
+
+      violation[{"msg": msg}] {
+        # Check node affinity
+        affinity := input.review.object.spec.affinity.nodeAffinity
+        requirement := affinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[_].matchExpressions[_]
+        requirement.key == "topology.kubernetes.io/region"
+        requirement.operator == "In"
+        region := requirement.values[_]
+        not contains(input.parameters.allowedRegions, region)
+        msg := sprintf("nodeAffinity region %s is not in allowed EU regions: %v", [region, input.parameters.allowedRegions])
+      }
+
+      violation[{"msg": msg}] {
+        # Check PVC storage class for region binding
+        volume := input.review.object.spec.volumes[_]
+        volume.persistentVolumeClaim
+        # This would need to be expanded based on your storage class naming
+        not storage_class_is_eu_compliant(volume.persistentVolumeClaim.claimName)
+        msg := sprintf("PVC %s may not be EU-region compliant", [volume.persistentVolumeClaim.claimName])
+      }
+
+      contains(array, item) {
+        array[_] == item
+      }
+
+      storage_class_is_eu_compliant(claim_name) {
+        # Simplified check - would need actual PVC lookup
+        contains(claim_name, "eu-")
+      }
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sEURegionOnly
+metadata:
+  name: voicehive-eu-region-compliance
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+    - apiGroups: ["apps"]
+      kinds: 
+      - Deployment
+      - StatefulSet
+      - DaemonSet
+    - apiGroups: ["batch"]
+      kinds:
+      - Job
+    - apiGroups: [""]
+      kinds:
+      - Pod
+    namespaces:
+    - "voicehive-production"
+    - "voicehive-staging"
+  parameters:
+    allowedRegions:
+    - "eu-west-1"      # Ireland
+    - "eu-central-1"   # Frankfurt
+    - "eu-north-1"     # Stockholm
+    - "eu-south-1"     # Milan
+    - "eu-west-2"      # London (if UK compliance acceptable)
+    - "eu-west-3"      # Paris
+
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredlabels
+  annotations:
+    description: "Requires specific labels for compliance and operations"
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredLabels
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            labels:
+              description: "List of required label keys"
+              type: array
+              items:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  allowedValues:
+                    type: array
+                    items:
+                      type: string
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package k8srequiredlabels
+
+      import future.keywords.contains
+      import future.keywords.if
+
+      violation[{"msg": msg}] {
+        required := input.parameters.labels[_]
+        not input.review.object.metadata.labels[required.key]
+        msg := sprintf("missing required label: %s", [required.key])
+      }
+
+      violation[{"msg": msg}] {
+        required := input.parameters.labels[_]
+        value := input.review.object.metadata.labels[required.key]
+        count(required.allowedValues) > 0
+        not contains(required.allowedValues, value)
+        msg := sprintf("label %s has invalid value %s. Allowed: %v", [required.key, value, required.allowedValues])
+      }
+
+      contains(array, item) {
+        array[_] == item
+      }
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredLabels
+metadata:
+  name: voicehive-required-labels
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+    - apiGroups: ["apps"]
+      kinds: 
+      - Deployment
+      - StatefulSet
+      - DaemonSet
+    - apiGroups: ["batch"]
+      kinds:
+      - Job
+      - CronJob
+    namespaces:
+    - "voicehive-production"
+    - "voicehive-staging"
+  parameters:
+    labels:
+    - key: "app.kubernetes.io/name"
+      allowedValues: []  # Any value allowed
+    - key: "app.kubernetes.io/version"
+      allowedValues: []  # Any value allowed
+    - key: "app.kubernetes.io/managed-by"
+      allowedValues: ["helm", "kustomize", "terraform", "kubectl"]
+    - key: "voicehive.com/data-classification"
+      allowedValues: ["public", "internal", "confidential", "restricted"]
+    - key: "voicehive.com/compliance-scope"
+      allowedValues: ["gdpr", "pci", "none"]

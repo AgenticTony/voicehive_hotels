@@ -1,0 +1,245 @@
+# VoiceHive Hotels - Vault HA Configuration
+# Production-ready values for HashiCorp Vault deployment
+
+global:
+  enabled: true
+  tlsDisable: false
+  namespace: vault
+  
+  # EU region compliance
+  region: eu-west-1
+  
+  # Security settings
+  psp:
+    enable: true
+  
+  openshift: false
+
+injector:
+  enabled: true
+  replicas: 2
+  
+  # EU region node affinity
+  affinity: |
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: node.kubernetes.io/region
+            operator: In
+            values: ["eu-west-1", "eu-central-1"]
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: {{ include "vault.name" . }}-agent-injector
+        topologyKey: kubernetes.io/hostname
+  
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "250m"
+
+server:
+  # HA configuration
+  ha:
+    enabled: true
+    replicas: 3
+    
+    # Raft storage for HA
+    raft:
+      enabled: true
+      config: |
+        ui = true
+        
+        listener "tcp" {
+          tls_disable = false
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+          tls_cert_file = "/vault/userconfig/vault-server-tls/tls.crt"
+          tls_key_file = "/vault/userconfig/vault-server-tls/tls.key"
+          tls_client_ca_file = "/vault/userconfig/vault-server-tls/ca.crt"
+          
+          # Security headers
+          x_forwarded_for_authorized_addrs = ["10.0.0.0/8", "172.16.0.0/12"]
+          x_forwarded_for_hop_skips = 0
+        }
+        
+        storage "raft" {
+          path = "/vault/data"
+          
+          # Auto-join via K8s
+          retry_join {
+            auto_join = "provider=k8s namespace=vault label_selector=\"component=server,app.kubernetes.io/name=vault\""
+            auto_join_scheme = "https"
+            leader_ca_cert_file = "/vault/userconfig/vault-server-tls/ca.crt"
+            leader_tls_servername = "vault.vault.svc.cluster.local"
+          }
+          
+          performance_multiplier = 1
+          
+          # Autopilot for automatic upgrades
+          autopilot {
+            cleanup_dead_servers = true
+            last_contact_threshold = "10s"
+            server_stabilization_time = "30s"
+            max_trailing_logs = 1000
+            min_quorum = 3
+          }
+        }
+        
+        # AWS KMS auto-unseal
+        seal "awskms" {
+          region = "eu-west-1"
+          kms_key_id = "alias/vault-unseal"
+        }
+        
+        # Service registration
+        service_registration "kubernetes" {}
+        
+        # Telemetry
+        telemetry {
+          prometheus_retention_time = "30s"
+          disable_hostname = true
+        }
+        
+        # Audit sinks
+        audit {
+          enabled = true
+        }
+        
+        log_level = "info"
+        log_format = "json"
+        
+        # GDPR compliance features
+        default_lease_ttl = "768h"
+        max_lease_ttl = "8760h"
+        
+        # API rate limiting
+        api_addr = "https://vault.voicehive-hotels.eu:8200"
+        cluster_addr = "https://vault.voicehive-hotels.eu:8201"
+  
+  # Resources
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsGroup: 1000
+    runAsUser: 100
+    fsGroup: 1000
+    capabilities:
+      drop:
+      - ALL
+      add:
+      - IPC_LOCK
+  
+  # Volume for data persistence
+  dataStorage:
+    enabled: true
+    size: 10Gi
+    storageClass: "encrypted-gp3"
+    accessMode: ReadWriteOnce
+    
+  # Audit storage
+  auditStorage:
+    enabled: true
+    size: 10Gi
+    storageClass: "encrypted-gp3"
+    accessMode: ReadWriteOnce
+    mountPath: "/vault/audit"
+  
+  # EU region node affinity
+  affinity: |
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: node.kubernetes.io/region
+            operator: In
+            values: ["eu-west-1", "eu-central-1"]
+          - key: node.kubernetes.io/instance-type
+            operator: In
+            values: ["m5.large", "m5.xlarge", "m5.2xlarge"]
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: {{ include "vault.name" . }}
+            app.kubernetes.io/instance: "{{ .Release.Name }}"
+            component: server
+        topologyKey: kubernetes.io/hostname
+  
+  # Service configuration
+  service:
+    enabled: true
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "ssl"
+      external-dns.alpha.kubernetes.io/hostname: vault.voicehive-hotels.eu
+  
+  # Ingress for UI access
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+    - host: vault.voicehive-hotels.eu
+      paths: ["/"]
+    tls:
+    - secretName: vault-tls
+      hosts:
+      - vault.voicehive-hotels.eu
+    annotations:
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      
+  # Extra environment variables
+  extraEnvironmentVars:
+    AWS_REGION: "eu-west-1"
+    VAULT_LOG_FORMAT: "json"
+    VAULT_TELEMETRY_PROMETHEUS_RETENTION_TIME: "30s"
+  
+  # Priority class for critical workload
+  priorityClassName: "high-priority"
+  
+  # Pod disruption budget
+  disruption:
+    enabled: true
+    maxUnavailable: 1
+
+# Vault UI
+ui:
+  enabled: true
+  serviceType: "ClusterIP"
+  
+# CSI provider
+csi:
+  enabled: true
+  
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "100m"
+
+# Prometheus monitoring
+serverTelemetry:
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s

@@ -1,0 +1,277 @@
+# Default values for VoiceHive Hotels
+# This is a YAML-formatted file.
+
+# Global settings
+global:
+  region: eu-west-1
+  environment: production
+  gdprCompliant: true
+  imageRegistry: ghcr.io/voicehive
+  imagePullSecrets:
+    - name: ghcr-secret
+
+# Orchestrator configuration
+orchestrator:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: orchestrator
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+  
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/rate-limit: "100"
+    hosts:
+      - host: api.voicehive-hotels.eu
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: voicehive-tls
+        hosts:
+          - api.voicehive-hotels.eu
+
+# PMS Connectors
+connectors:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: connectors
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  # PMS-specific configuration
+  pms:
+    apaleo:
+      enabled: true
+    mews:
+      enabled: true
+    opera:
+      enabled: true
+    cloudbeds:
+      enabled: false
+    siteminder:
+      enabled: false
+
+# Media Agent (LiveKit)
+mediaAgent:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: media-agent
+    tag: "1.0.0"
+  
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  
+  livekit:
+    url: "wss://livekit-eu.voicehive-hotels.eu"
+    region: eu-west-1
+
+# ASR Service (NVIDIA Riva)
+asr:
+  enabled: true
+  engine: riva
+  
+  riva:
+    replicaCount: 2
+    image:
+      repository: riva-proxy
+      tag: "1.0.0"
+    
+    resources:
+      requests:
+        memory: "4Gi"
+        cpu: "2000m"
+        nvidia.com/gpu: 1
+      limits:
+        memory: "8Gi"
+        cpu: "4000m"
+        nvidia.com/gpu: 1
+    
+    nodeSelector:
+      workload: gpu
+    
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+
+# TTS Service
+tts:
+  enabled: true
+  
+  router:
+    replicaCount: 2
+    image:
+      repository: tts-router
+      tag: "1.0.0"
+    
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+    
+    # TTS engine configuration
+    engines:
+      elevenlabs:
+        enabled: true
+        zeroRetention: true
+      openvoice:
+        enabled: true
+      xtts:
+        enabled: true
+    
+    # Language routing
+    languageRouting:
+      default: elevenlabs
+      overrides:
+        de: openvoice
+        fr: openvoice
+        es: openvoice
+
+# Database settings
+postgresql:
+  enabled: false  # Use RDS in production
+  
+externalDatabase:
+  enabled: true
+  host: "voicehive-production.cluster-xxxxx.eu-west-1.rds.amazonaws.com"
+  port: 5432
+  database: voicehive
+  existingSecret: voicehive-db-secret
+
+# Redis settings
+redis:
+  enabled: false  # Use ElastiCache in production
+  
+externalRedis:
+  enabled: true
+  host: "voicehive-production.xxxxx.cache.amazonaws.com"
+  port: 6379
+  existingSecret: voicehive-redis-secret
+
+# Monitoring
+monitoring:
+  enabled: true
+  
+  prometheus:
+    retention: 30d
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+    
+  grafana:
+    adminPassword: ""  # Set via secret
+    persistence:
+      enabled: true
+      size: 10Gi
+    
+  alerts:
+    enabled: true
+    slackWebhook: ""  # Set via secret
+
+# Security settings
+security:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+  
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+# GDPR compliance
+gdpr:
+  dataRetention:
+    recordings: 30
+    transcripts: 90
+  
+  regionPinning:
+    enforced: true
+    allowedRegions:
+      - eu-west-1
+      - eu-central-1
+  
+  piiRedaction:
+    enabled: true
+    engine: presidio
+
+# Vault integration
+vault:
+  enabled: true
+  address: "https://vault.voicehive-hotels.eu"
+  role: "voicehive-app"
+  
+# Service mesh
+serviceMesh:
+  enabled: true
+  provider: istio
+  
+  mtls:
+    enabled: true
+  
+  circuitBreaker:
+    enabled: true
+    consecutiveErrors: 5
+    interval: 30s
+    baseEjectionTime: 30s
+
+# Backup configuration
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention: 30  # days
+
+# Feature flags
+featureFlags:
+  voiceCloning: true
+  multiLanguage: true
+  webhooks: true
+  batchProcessing: false

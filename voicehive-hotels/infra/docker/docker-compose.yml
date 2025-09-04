@@ -1,0 +1,286 @@
+version: '3.9'
+
+services:
+  # Core Orchestrator
+  orchestrator:
+    build:
+      context: ../../services/orchestrator
+      dockerfile: Dockerfile
+    container_name: voicehive-orchestrator
+    environment:
+      - ENVIRONMENT=development
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/voicehive
+      - VAULT_ADDR=http://vault:8200
+      - AWS_REGION=eu-west-1
+      - CONFIG_PATH=/config/security/gdpr-config.yaml
+    volumes:
+      - ../../config:/config:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+      - postgres
+      - vault
+    networks:
+      - voicehive
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # PMS Connectors Service
+  connectors:
+    build:
+      context: ../../connectors
+      dockerfile: Dockerfile
+    container_name: voicehive-connectors
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - VAULT_ADDR=http://vault:8200
+    volumes:
+      - ../../connectors:/app
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+      - vault
+    networks:
+      - voicehive
+
+  # LiveKit Server (SFU)
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: voicehive-livekit
+    command: --dev --config /config/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/config/livekit.yaml:ro
+    ports:
+      - "7880:7880"  # HTTP
+      - "7881:7881"  # WebSocket
+      - "50000-60000:50000-60000/udp"  # RTC
+    networks:
+      - voicehive
+    restart: unless-stopped
+
+  # LiveKit Agent (Media Handler)
+  media-agent:
+    build:
+      context: ../../services/media/livekit-agent
+      dockerfile: Dockerfile
+    container_name: voicehive-media-agent
+    environment:
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=devsecret
+      - ORCHESTRATOR_URL=http://orchestrator:8080
+    depends_on:
+      - livekit
+      - orchestrator
+    networks:
+      - voicehive
+
+  # NVIDIA Riva Server (ASR/TTS)
+  riva-server:
+    image: nvcr.io/nvidia/riva/riva-speech:2.13.0-server
+    container_name: voicehive-riva
+    command: start-riva --nlp_service=false --asr_service=true --tts_service=true
+    volumes:
+      - riva-model-repo:/data
+    ports:
+      - "50051:50051"  # gRPC
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - voicehive
+    restart: unless-stopped
+
+  # Riva Proxy (Simplified API)
+  riva-proxy:
+    build:
+      context: ../../services/asr/riva-proxy
+      dockerfile: Dockerfile
+    container_name: voicehive-riva-proxy
+    environment:
+      - RIVA_SERVER=riva-server:50051
+    ports:
+      - "51051:51051"
+    depends_on:
+      - riva-server
+    networks:
+      - voicehive
+
+  # TTS Router
+  tts-router:
+    build:
+      context: ../../services/tts/router
+      dockerfile: Dockerfile
+    container_name: voicehive-tts-router
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - OPENVOICE_URL=http://openvoice:8080
+      - XTTS_URL=http://xtts:8080
+      - CACHE_ENABLED=true
+    ports:
+      - "9000:9000"
+    depends_on:
+      - redis
+      - openvoice
+      - xtts
+    networks:
+      - voicehive
+
+  # OpenVoice v2 TTS
+  openvoice:
+    build:
+      context: ../../services/tts/openvoice
+      dockerfile: Dockerfile
+    container_name: voicehive-openvoice
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - voicehive
+
+  # XTTS-v2 TTS
+  xtts:
+    build:
+      context: ../../services/tts/xtts
+      dockerfile: Dockerfile
+    container_name: voicehive-xtts
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - voicehive
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: voicehive-redis
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - voicehive
+    restart: unless-stopped
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: voicehive-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=voicehive
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - voicehive
+    restart: unless-stopped
+
+  # HashiCorp Vault
+  vault:
+    image: vault:latest
+    container_name: voicehive-vault
+    cap_add:
+      - IPC_LOCK
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=dev-root-token
+      - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    networks:
+      - voicehive
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: voicehive-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    networks:
+      - voicehive
+    restart: unless-stopped
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: voicehive-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ../../ops/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+    ports:
+      - "3000:3000"
+    networks:
+      - voicehive
+    restart: unless-stopped
+
+  # Loki (for logs)
+  loki:
+    image: grafana/loki:latest
+    container_name: voicehive-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+    networks:
+      - voicehive
+    restart: unless-stopped
+
+  # Tempo (for traces)
+  tempo:
+    image: grafana/tempo:latest
+    container_name: voicehive-tempo
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/tmp/tempo
+    ports:
+      - "14268:14268"  # Jaeger ingest
+      - "4317:4317"    # OTLP gRPC
+    networks:
+      - voicehive
+
+networks:
+  voicehive:
+    driver: bridge
+
+volumes:
+  redis-data:
+  postgres-data:
+  riva-model-repo:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  tempo-data:

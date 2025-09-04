@@ -1,0 +1,149 @@
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredsecuritycontrols
+  annotations:
+    description: >-
+      Enforces required security controls for VoiceHive Hotels workloads:
+      - Non-root containers
+      - Read-only root filesystem  
+      - No privilege escalation
+      - Drop all capabilities
+      - Security contexts required
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredSecurityControls
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            allowedCapabilities:
+              description: "List of allowed capabilities that can be added"
+              type: array
+              items:
+                type: string
+            requiredDropCapabilities:
+              description: "List of capabilities that must be dropped"
+              type: array
+              items:
+                type: string
+            allowedUsers:
+              description: "List of allowed UIDs"
+              type: array
+              items:
+                type: integer
+            allowedGroups:
+              description: "List of allowed GIDs"
+              type: array
+              items:
+                type: integer
+            readOnlyRootFilesystem:
+              description: "Require read-only root filesystem"
+              type: boolean
+            allowPrivilegeEscalation:
+              description: "Allow privilege escalation"
+              type: boolean
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package k8srequiredsecuritycontrols
+
+      import future.keywords.contains
+      import future.keywords.if
+      import future.keywords.in
+
+      violation[{"msg": msg}] {
+        # Check containers
+        container := input.review.object.spec.containers[_]
+        msg := check_security_context(container, "container")
+      }
+
+      violation[{"msg": msg}] {
+        # Check init containers
+        container := input.review.object.spec.initContainers[_]
+        msg := check_security_context(container, "initContainer")
+      }
+
+      violation[{"msg": msg}] {
+        # Check pod security context
+        not input.review.object.spec.securityContext.runAsNonRoot
+        msg := "Pod must set securityContext.runAsNonRoot=true"
+      }
+
+      violation[{"msg": msg}] {
+        # Check pod security context has runAsUser
+        not input.review.object.spec.securityContext.runAsUser
+        msg := "Pod must set securityContext.runAsUser"
+      }
+
+      violation[{"msg": msg}] {
+        # Check pod security context has fsGroup
+        not input.review.object.spec.securityContext.fsGroup
+        msg := "Pod must set securityContext.fsGroup"
+      }
+
+      # Helper function to check container security context
+      check_security_context(container, type) = msg {
+        not container.securityContext
+        msg := sprintf("%s %s is missing securityContext", [type, container.name])
+      }
+
+      check_security_context(container, type) = msg {
+        container.securityContext
+        not container.securityContext.readOnlyRootFilesystem
+        input.parameters.readOnlyRootFilesystem
+        msg := sprintf("%s %s must set readOnlyRootFilesystem=true", [type, container.name])
+      }
+
+      check_security_context(container, type) = msg {
+        container.securityContext
+        container.securityContext.allowPrivilegeEscalation
+        not input.parameters.allowPrivilegeEscalation
+        msg := sprintf("%s %s must set allowPrivilegeEscalation=false", [type, container.name])
+      }
+
+      check_security_context(container, type) = msg {
+        container.securityContext
+        not container.securityContext.runAsNonRoot
+        msg := sprintf("%s %s must set runAsNonRoot=true", [type, container.name])
+      }
+
+      check_security_context(container, type) = msg {
+        container.securityContext
+        container.securityContext.runAsUser == 0
+        msg := sprintf("%s %s must not run as root (UID 0)", [type, container.name])
+      }
+
+      check_security_context(container, type) = msg {
+        container.securityContext
+        not container.securityContext.capabilities.drop
+        msg := sprintf("%s %s must drop capabilities", [type, container.name])
+      }
+
+      check_security_context(container, type) = msg {
+        container.securityContext
+        container.securityContext.capabilities.drop
+        required_drops := input.parameters.requiredDropCapabilities[_]
+        not contains(container.securityContext.capabilities.drop, required_drops)
+        msg := sprintf("%s %s must drop capability: %s", [type, container.name, required_drops])
+      }
+
+      check_security_context(container, type) = msg {
+        container.securityContext
+        container.securityContext.capabilities.add
+        added := container.securityContext.capabilities.add[_]
+        not contains(input.parameters.allowedCapabilities, added)
+        msg := sprintf("%s %s adds disallowed capability: %s", [type, container.name, added])
+      }
+
+      check_security_context(container, type) = msg {
+        container.securityContext
+        container.securityContext.privileged
+        msg := sprintf("%s %s must not be privileged", [type, container.name])
+      }
+
+      contains(array, item) {
+        array[_] == item
+      }

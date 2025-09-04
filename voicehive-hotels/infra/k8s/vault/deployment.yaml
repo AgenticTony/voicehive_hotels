@@ -1,0 +1,330 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vault
+  labels:
+    name: vault
+    security: critical
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault
+  namespace: vault
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-server-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: vault
+  namespace: vault
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-config
+  namespace: vault
+data:
+  vault.hcl: |
+    ui = true
+    
+    listener "tcp" {
+      tls_disable = false
+      address = "[::]:8200"
+      cluster_address = "[::]:8201"
+      tls_cert_file = "/vault/userconfig/vault-server-tls/tls.crt"
+      tls_key_file = "/vault/userconfig/vault-server-tls/tls.key"
+      tls_client_ca_file = "/vault/userconfig/vault-server-tls/ca.crt"
+    }
+    
+    storage "dynamodb" {
+      ha_enabled = "true"
+      region = "eu-west-1"
+      table = "vault-backend"
+      read_capacity = 5
+      write_capacity = 5
+    }
+    
+    seal "awskms" {
+      region = "eu-west-1"
+      kms_key_id = "VAULT_KMS_KEY_ID"
+    }
+    
+    telemetry {
+      prometheus_retention_time = "30s"
+      disable_hostname = true
+    }
+    
+    log_level = "Info"
+    
+    # Audit logging
+    audit {
+      enabled = true
+    }
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vault
+  namespace: vault
+  labels:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/instance: vault
+spec:
+  serviceName: vault-internal
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vault
+      app.kubernetes.io/instance: vault
+      component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vault
+        app.kubernetes.io/instance: vault
+        component: server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8200"
+        prometheus.io/path: "/v1/sys/metrics"
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: vault
+                app.kubernetes.io/instance: vault
+                component: server
+            topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 10
+      serviceAccountName: vault
+      securityContext:
+        runAsNonRoot: true
+        runAsGroup: 1000
+        runAsUser: 100
+        fsGroup: 1000
+      containers:
+      - name: vault
+        image: hashicorp/vault:1.15.2
+        imagePullPolicy: IfNotPresent
+        command:
+        - "/bin/sh"
+        - "-c"
+        args:
+        - |
+          cp /vault/config/vault.hcl /tmp/vault.hcl
+          sed -i 's/VAULT_KMS_KEY_ID/'"$VAULT_KMS_KEY_ID"'/g' /tmp/vault.hcl
+          vault server -config=/tmp/vault.hcl
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsGroup: 1000
+          runAsUser: 100
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - IPC_LOCK
+        ports:
+        - containerPort: 8200
+          name: https
+          protocol: TCP
+        - containerPort: 8201
+          name: https-internal
+          protocol: TCP
+        - containerPort: 8202
+          name: https-rep
+          protocol: TCP
+        env:
+        - name: VAULT_ADDR
+          value: "https://127.0.0.1:8200"
+        - name: VAULT_API_ADDR
+          value: "https://$(POD_IP):8200"
+        - name: SKIP_CHOWN
+          value: "true"
+        - name: SKIP_SETCAP
+          value: "true"
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: VAULT_CLUSTER_ADDR
+          value: "https://$(HOSTNAME).vault-internal:8201"
+        - name: VAULT_LOG_LEVEL
+          value: "info"
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: VAULT_KMS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: vault-kms
+              key: key-id
+        - name: AWS_REGION
+          value: "eu-west-1"
+        volumeMounts:
+        - name: config
+          mountPath: /vault/config
+        - name: vault-server-tls
+          mountPath: /vault/userconfig/vault-server-tls
+          readOnly: true
+        - name: home
+          mountPath: /home/vault
+        - name: tmp
+          mountPath: /tmp
+        livenessProbe:
+          httpGet:
+            path: /v1/sys/health?standbyok=true
+            port: 8200
+            scheme: HTTPS
+          initialDelaySeconds: 60
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 2
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204
+            port: 8200
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 2
+          timeoutSeconds: 3
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 250m
+          limits:
+            memory: 512Mi
+            cpu: 500m
+      volumes:
+      - name: config
+        configMap:
+          name: vault-config
+      - name: vault-server-tls
+        secret:
+          secretName: vault-server-tls
+      - name: home
+        emptyDir:
+          sizeLimit: "1Gi"
+      - name: tmp
+        emptyDir:
+          sizeLimit: "1Gi"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: vault
+  labels:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/instance: vault
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "ssl"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "https"
+spec:
+  type: LoadBalancer
+  publishNotReadyAddresses: true
+  ports:
+  - name: https
+    port: 8200
+    targetPort: 8200
+  selector:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/instance: vault
+    component: server
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-internal
+  namespace: vault
+  labels:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/instance: vault
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+  - name: https
+    port: 8200
+    targetPort: 8200
+  - name: https-internal
+    port: 8201
+    targetPort: 8201
+  selector:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/instance: vault
+    component: server
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vault
+  namespace: vault
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vault
+      app.kubernetes.io/instance: vault
+      component: server
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vault
+  namespace: vault
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vault
+      app.kubernetes.io/instance: vault
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          vault-access: "true"
+    - podSelector: {}
+    ports:
+    - port: 8200
+    - port: 8201
+  egress:
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - port: 443  # AWS KMS
+    - port: 53   # DNS
+    protocol: TCP
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: vault
+    ports:
+    - port: 8201  # Cluster communication
