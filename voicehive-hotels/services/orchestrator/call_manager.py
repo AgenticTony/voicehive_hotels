@@ -4,7 +4,6 @@ Manages call state, coordinates between LiveKit, ASR, TTS, and LLM services
 """
 
 import asyncio
-import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
@@ -14,15 +13,16 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, ConfigDict
 import redis.asyncio as redis
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_random_exponential
 from openai import AzureOpenAI
 
 from connectors import ConnectorFactory
-from config.security.pii_redactor import PIIRedactor
+from services.orchestrator.utils import PIIRedactor
+from services.orchestrator.tts_client import TTSClient, TTSSynthesisResponse
+from services.orchestrator.logging_adapter import get_safe_logger
 
-# Configure logging with PII redaction
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Use safe logger adapter
+logger = get_safe_logger(__name__)
 pii_redactor = PIIRedactor()
 
 
@@ -136,7 +136,7 @@ class CallManager:
         redis_client: redis.Redis,
         connector_factory: ConnectorFactory,
         asr_url: str = "http://riva-proxy:8000",
-        tts_url: str = "http://tts-router:8000",
+        tts_url: str = "http://tts-router:9000",
         llm_url: str = "http://llm-service:8000"
     ):
         self.redis = redis_client
@@ -144,6 +144,9 @@ class CallManager:
         self.asr_url = asr_url
         self.tts_url = tts_url
         self.llm_url = llm_url
+        
+        # Initialize TTS client
+        self.tts_client = TTSClient(tts_url=self.tts_url)
         
         # Initialize Azure OpenAI client
         self.openai_client = AzureOpenAI(
@@ -158,7 +161,7 @@ class CallManager:
         
     async def handle_event(self, event: CallEvent) -> Dict[str, Any]:
         """Handle events from LiveKit agent"""
-        logger.info(f"Handling event: {event.event} for room: {event.room_name}")
+        logger.info("handling_event", event=event.event, room=event.room_name)
         
         # Route based on event type
         if event.event == "agent_ready":
@@ -172,7 +175,7 @@ class CallManager:
         elif event.event == "dtmf":
             return await self._handle_dtmf(event)
         else:
-            logger.warning(f"Unknown event type: {event.event}")
+            logger.warning("unknown_event_type", event=event.event)
             return {"status": "unknown_event"}
             
     async def _handle_agent_ready(self, event: CallEvent) -> Dict[str, Any]:
@@ -195,7 +198,7 @@ class CallManager:
         # Store in memory
         self.active_calls[context.call_id] = context
         
-        logger.info(f"Call initialized: {context.call_id}")
+        logger.info("call_initialized", call_id=context.call_id)
         return {
             "status": "ready",
             "call_id": context.call_id
@@ -206,7 +209,7 @@ class CallManager:
         # Find call by room name
         context = await self._get_call_by_room(event.room_name)
         if not context:
-            logger.error(f"Call not found for room: {event.room_name}")
+            logger.error("call_not_found", room=event.room_name)
             return {"status": "error", "message": "call_not_found"}
             
         # Update context
@@ -224,12 +227,25 @@ class CallManager:
         # Send initial greeting
         greeting = await self._generate_greeting(context)
         
+        # Synthesize greeting
+        tts_result = await self._synthesize_response(
+            greeting["text"],
+            greeting["language"]
+        )
+        
         return {
             "status": "started",
             "call_id": context.call_id,
             "action": "speak",
             "text": greeting["text"],
-            "language": greeting["language"]
+            "language": greeting["language"],
+            "audio_data": tts_result.audio_data if tts_result else None,
+            "audio_format": "mp3",
+            "metadata": {
+                "tts_engine": tts_result.engine_used if tts_result else None,
+                "tts_cached": tts_result.cached if tts_result else False,
+                "tts_duration_ms": tts_result.duration_ms if tts_result else None
+            }
         }
         
     async def _handle_call_ended(self, event: CallEvent) -> Dict[str, Any]:
@@ -250,13 +266,12 @@ class CallManager:
         
         # Log call summary with PII redacted
         logger.info(
-            f"Call ended: {context.call_id}",
-            extra={
-                "duration_seconds": duration_seconds,
-                "turns": len(context.conversation_history),
-                "language": context.detected_language,
-                "hotel_id": context.hotel_id
-            }
+            "call_ended",
+            call_id=context.call_id,
+            duration_seconds=duration_seconds,
+            turns=len(context.conversation_history),
+            language=context.detected_language,
+            hotel_id=context.hotel_id
         )
         
         # Clean up
@@ -302,6 +317,16 @@ class CallManager:
             "language": response["language"]
         })
         
+        # Synthesize speech
+        tts_result = await self._synthesize_response(
+            response["text"],
+            response["language"]
+        )
+        
+        # Update TTS latency metric
+        if tts_result:
+            context.tts_latency_ms = tts_result.processing_time_ms
+        
         # Save updated context
         await self._save_context(context)
         
@@ -311,14 +336,21 @@ class CallManager:
             "action": "speak",
             "text": response["text"],
             "language": response["language"],
-            "metadata": response.get("metadata", {})
+            "audio_data": tts_result.audio_data if tts_result else None,
+            "audio_format": "mp3",
+            "metadata": {
+                **response.get("metadata", {}),
+                "tts_engine": tts_result.engine_used if tts_result else None,
+                "tts_cached": tts_result.cached if tts_result else False,
+                "tts_duration_ms": tts_result.duration_ms if tts_result else None
+            }
         }
         
     async def _handle_dtmf(self, event: CallEvent) -> Dict[str, Any]:
         """Handle DTMF tones"""
         # Implement DTMF handling for menu navigation
         digit = event.data.get("digit")
-        logger.info(f"DTMF received: {digit}")
+        logger.info("dtmf_received", digit=digit)
         
         # TODO: Implement DTMF menu logic
         return {"status": "dtmf_received", "digit": digit}
@@ -357,7 +389,7 @@ class CallManager:
             }
             
         except Exception as e:
-            logger.error(f"Failed to load hotel config: {e}")
+            logger.error("failed_to_load_hotel_config", error=str(e))
             
     async def _generate_greeting(self, context: CallContext) -> Dict[str, str]:
         """Generate appropriate greeting based on context"""
@@ -376,7 +408,7 @@ class CallManager:
             "language": context.detected_language
         }
         
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5))
+    @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, max=10), reraise=True)
     async def _process_user_input(self, context: CallContext, text: str) -> Dict[str, Any]:
         """Process user input with Azure OpenAI and function calling"""
         try:
@@ -412,7 +444,7 @@ class CallManager:
             tools = self._get_hotel_functions()
             
             # Make OpenAI API call
-            response = await self._call_openai_with_functions(messages, tools)
+            response = await self._call_openai_with_functions(messages, tools, context)
             
             return {
                 "text": response,
@@ -497,9 +529,9 @@ class CallManager:
             }
         ]
     
-    async def _call_openai_with_functions(self, messages: List[Dict], tools: List[Dict]) -> str:
+    async def _call_openai_with_functions(self, messages: List[Dict], tools: List[Dict], context: CallContext) -> str:
         """Call OpenAI with function calling support"""
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         try:
             # First API call
@@ -552,18 +584,18 @@ class CallManager:
             else:
                 result = response_message.content
             
-            # Record latency
-            self.llm_latency_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+            # Record latency in context (fix: was assigning to self instead of context)
+            context.llm_latency_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
             
             return result
             
         except Exception as e:
-            logger.error(f"OpenAI API call failed: {e}")
+            logger.error("openai_api_call_failed", error=str(e))
             raise
     
     async def _execute_hotel_function(self, function_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute hotel-related function calls"""
-        logger.info(f"Executing function: {function_name}", args=args)
+        logger.info("executing_function", function_name=function_name, args=args)
         
         if function_name == "check_availability":
             # Mock response - would call PMS connector
@@ -622,3 +654,66 @@ class CallManager:
             "language": context.detected_language,
             "intent": intent
         }
+        
+    async def _synthesize_response(
+        self,
+        text: str,
+        language: str
+    ) -> Optional[TTSSynthesisResponse]:
+        """Synthesize text to speech using TTS Router"""
+        try:
+            # Map language codes if needed
+            tts_language = self._map_language_code(language)
+            
+            # Synthesize with TTS client
+            result = await self.tts_client.synthesize(
+                text=text,
+                language=tts_language,
+                speed=1.0,
+                format="mp3",
+                sample_rate=24000
+            )
+            
+            logger.info(
+                "tts_synthesis_successful",
+                language=language,
+                engine_used=result.engine_used,
+                duration_ms=result.duration_ms,
+                cached=result.cached
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(
+                "tts_synthesis_failed",
+                error=str(e),
+                language=language
+            )
+            # Return None to indicate synthesis failed
+            # The orchestrator can still send text-only response
+            return None
+            
+    def _map_language_code(self, language: str) -> str:
+        """Map language codes to TTS-compatible format"""
+        # Common mappings
+        language_map = {
+            "en": "en-US",
+            "de": "de-DE",
+            "es": "es-ES",
+            "fr": "fr-FR",
+            "it": "it-IT",
+            "nl": "nl-NL",
+            "pt": "pt-PT",
+            "pl": "pl-PL",
+            "ru": "ru-RU",
+            "ja": "ja-JP",
+            "zh": "zh-CN"
+        }
+        
+        # If already in full format (e.g., en-US), return as is
+        if len(language) > 2 and '-' in language:
+            return language
+            
+        # Otherwise map to default regional variant
+        return language_map.get(language, "en-US")

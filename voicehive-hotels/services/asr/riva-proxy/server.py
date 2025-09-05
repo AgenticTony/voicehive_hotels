@@ -8,7 +8,7 @@ import asyncio
 import os
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -130,7 +130,7 @@ class ASRService:
             
     async def transcribe_offline(self, request: TranscribeRequest) -> TranscriptionResult:
         """Perform offline transcription"""
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         try:
             # Decode audio data
@@ -162,7 +162,7 @@ class ASRService:
                     confidence = result.alternatives[0].confidence
             
             # Record metrics
-            processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+            processing_time = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
             asr_requests_total.labels(
                 language=request.language,
                 type="offline",

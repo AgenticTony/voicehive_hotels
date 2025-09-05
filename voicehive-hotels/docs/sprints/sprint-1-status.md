@@ -1,6 +1,6 @@
 # Sprint 1: Status Update
-**Last Updated**: 2025-09-04 21:00:00 UTC
-**Sprint Progress**: Day 1 of 5 (60% complete)
+**Last Updated**: 2025-09-05 09:51:00 UTC
+**Sprint Progress**: Day 1 of 5 (65% complete)
 
 ## Executive Summary
 Sprint 1 is progressing rapidly! Core voice pipeline components are now implemented:
@@ -75,6 +75,16 @@ Next steps: Deploy GPU nodes for Riva, deploy services, and begin integration te
 - ✅ Updated documentation to clarify SIP region pinning
 - ✅ Fixed missing asyncio and json imports across services
 
+### Recent Fixes and Improvements (Day 1 Evening)
+- ✅ Fixed duplicate `__init__` method in ASR service
+- ✅ Created PIIRedactor utility module to resolve circular imports
+- ✅ Added Prometheus metrics testing suite
+- ✅ Fixed prometheus_client parser usage in tests
+- ✅ Installed missing dependencies (prometheus_client, redis)
+- ✅ Created comprehensive test for call_events_total counter
+- ✅ Fixed test parsing issue (family names without _total suffix)
+- ✅ All Prometheus tests now passing (4/4 tests)
+
 ## In Progress 🔄
 
 ### 1. LiveKit Cloud Setup
@@ -95,7 +105,7 @@ Next steps: Deploy GPU nodes for Riva, deploy services, and begin integration te
 - ✅ Implement transcription handler
 
 ### 2. Orchestrator Service Development
-**Status**: 90% Complete
+**Status**: 95% Complete
 **Owner**: Backend Team
 **Target**: Day 1-2
 
@@ -108,6 +118,9 @@ Next steps: Deploy GPU nodes for Riva, deploy services, and begin integration te
 - ✅ Add LLM integration with Azure OpenAI GPT-4
 - ✅ Implement function calling for PMS operations
 - ✅ Add multi-turn conversation support
+- ✅ Add Prometheus metrics (call_events_total counter)
+- ✅ Create comprehensive test suite for metrics
+- ✅ Fix circular import issues with PIIRedactor
 - [ ] Implement TTS request handling integration
 - [ ] Add call recording metadata storage
 
@@ -177,14 +190,15 @@ Next steps: Deploy GPU nodes for Riva, deploy services, and begin integration te
 
 ### Velocity
 - **Story Points Planned**: 34
-- **Story Points Completed**: 20
-- **Story Points Remaining**: 14
+- **Story Points Completed**: 22
+- **Story Points Remaining**: 12
 
 Completed stories:
 - LiveKit Agent Foundation (5 pts)
 - Riva ASR Client Integration (5 pts)  
 - Azure OpenAI Integration (5 pts)
 - TTS Router Service (5 pts)
+- Metrics and Testing Infrastructure (2 pts)
 
 ### SLO Tracking
 - **ASR Latency**: Not measured

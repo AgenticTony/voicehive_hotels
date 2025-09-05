@@ -5,22 +5,43 @@ Handles communication with the TTS Router service.
 
 import os
 import logging
-import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
-import base64
 
 import httpx
 from pydantic import BaseModel, Field
-from tenacity import retry, stop_after_attempt, wait_exponential_jitter
+from tenacity import retry, stop_after_attempt, wait_random_exponential
 
-# Structured logging with graceful fallback if structlog is unavailable
 try:
-    import structlog  # type: ignore
-    logger = structlog.get_logger(__name__)
-except Exception:  # pragma: no cover - fallback for minimal test envs
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
+    # Try absolute import first (for when module is imported from outside)
+    from services.orchestrator.logging_adapter import get_safe_logger
+except ImportError:
+    # Fall back to relative import (for when running tests)
+    from logging_adapter import get_safe_logger
+from prometheus_client import Histogram, Counter
+
+# Use safe logger adapter
+logger = get_safe_logger(__name__)
+
+# Prometheus metrics for TTS performance monitoring
+tts_synthesis_duration_seconds = Histogram(
+    'voicehive_tts_synthesis_duration_seconds',
+    'TTS synthesis duration in seconds',
+    ['language', 'engine', 'cached'],
+    buckets=(0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0)
+)
+
+tts_synthesis_total = Counter(
+    'voicehive_tts_synthesis_total',
+    'Total TTS synthesis requests',
+    ['language', 'engine', 'status']
+)
+
+tts_synthesis_errors = Counter(
+    'voicehive_tts_synthesis_errors',
+    'TTS synthesis errors',
+    ['language', 'error_type']
+)
 
 
 class TTSSynthesisRequest(BaseModel):
@@ -66,28 +87,11 @@ class TTSClient:
                 "Content-Type": "application/json",
             },
         )
-        self.default_voices = self._get_default_voices()
-        
-    def _get_default_voices(self) -> Dict[str, str]:
-        """Get default voices per language"""
-        return {
-            "en-US": "en-US-AriaNeural",
-            "en-GB": "en-GB-SoniaNeural",
-            "de-DE": "de-DE-KatjaNeural",
-            "es-ES": "es-ES-ElviraNeural",
-            "fr-FR": "fr-FR-DeniseNeural",
-            "it-IT": "it-IT-ElsaNeural",
-            "nl-NL": "nl-NL-ColetteNeural",
-            "pt-PT": "pt-PT-FernandaNeural",
-            "pl-PL": "pl-PL-ZofiaNeural",
-            "ru-RU": "ru-RU-SvetlanaNeural",
-            "ja-JP": "ja-JP-NanamiNeural",
-            "zh-CN": "zh-CN-XiaoxiaoNeural"
-        }
         
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential_jitter(initial=1, max=5)
+        wait=wait_random_exponential(multiplier=1, max=10),
+        reraise=True
     )
     async def synthesize(
         self,
@@ -138,6 +142,20 @@ class TTSClient:
             
             # Calculate processing time
             processing_time_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            processing_time_seconds = processing_time_ms / 1000.0
+            
+            # Record Prometheus metrics
+            tts_synthesis_duration_seconds.labels(
+                language=language,
+                engine=data.get("engine_used", "unknown"),
+                cached=str(data.get("cached", False))
+            ).observe(processing_time_seconds)
+            
+            tts_synthesis_total.labels(
+                language=language,
+                engine=data.get("engine_used", "unknown"),
+                status="success"
+            ).inc()
             
             logger.info(
                 "tts_synthesis_completed",
@@ -158,6 +176,18 @@ class TTSClient:
             )
             
         except httpx.HTTPStatusError as e:
+            # Record error metrics
+            tts_synthesis_total.labels(
+                language=language,
+                engine="unknown",
+                status="error"
+            ).inc()
+            
+            tts_synthesis_errors.labels(
+                language=language,
+                error_type="http_error"
+            ).inc()
+            
             logger.error(
                 "tts_synthesis_failed",
                 status_code=e.response.status_code,
@@ -166,6 +196,18 @@ class TTSClient:
             )
             raise
         except Exception as e:
+            # Record error metrics
+            tts_synthesis_total.labels(
+                language=language,
+                engine="unknown",
+                status="error"
+            ).inc()
+            
+            tts_synthesis_errors.labels(
+                language=language,
+                error_type=type(e).__name__
+            ).inc()
+            
             logger.error(
                 "tts_synthesis_error",
                 error=str(e),
@@ -198,7 +240,7 @@ class TTSClient:
             
         except Exception as e:
             logger.error(
-                "Failed to fetch voices",
+                "failed_to_fetch_voices",
                 error=str(e),
                 language=language
             )

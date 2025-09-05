@@ -6,7 +6,6 @@ Test that call_events_total counter increments correctly in orchestrator
 import os
 import pytest
 from fastapi.testclient import TestClient
-from prometheus_parser import text_string_to_metric_families
 import json
 
 # Set test environment variables
@@ -29,7 +28,7 @@ class TestCallEventsCounter:
         
     def _get_counter_value(self, metrics_text: str, counter_name: str, labels: dict) -> float:
         """Parse Prometheus metrics and get counter value for specific labels"""
-        for family in text_string_to_metric_families(metrics_text):
+        for family in parse_prometheus_text_format(metrics_text):
             if family.name == counter_name:
                 for sample in family.samples:
                     # Check if all label key-value pairs match
@@ -194,57 +193,58 @@ class TestCallEventsCounter:
         assert "# TYPE voicehive_call_events_total counter" in metrics_text
 
 
-# Helper class to parse Prometheus metrics
-class text_string_to_metric_families:
-    """Simple parser for Prometheus text format"""
+# Helper function to parse Prometheus metrics (minimal implementation for testing)
+def parse_prometheus_text_format(text):
+    """Simple parser for Prometheus text format - minimal implementation for testing only"""
+    lines = text.strip().split('\n')
+    current_metric = None
+    metrics = []
     
-    def __init__(self, text):
-        self.text = text
+    for line in lines:
+        line = line.strip()
         
-    def __iter__(self):
-        """Parse metrics text and yield metric families"""
-        lines = self.text.strip().split('\n')
-        current_metric = None
-        
-        for line in lines:
-            line = line.strip()
+        # Skip empty lines and comments (except TYPE)
+        if not line or (line.startswith('#') and not line.startswith('# TYPE')):
+            continue
             
-            # Skip empty lines and comments (except TYPE)
-            if not line or (line.startswith('#') and not line.startswith('# TYPE')):
-                continue
+        # Parse TYPE line
+        if line.startswith('# TYPE'):
+            # If we have a current metric, save it
+            if current_metric:
+                metrics.append(current_metric)
                 
-            # Parse TYPE line
-            if line.startswith('# TYPE'):
-                parts = line.split()
-                if len(parts) >= 4:
-                    metric_name = parts[2]
-                    metric_type = parts[3]
-                    current_metric = MetricFamily(metric_name, metric_type)
-                    
-            # Parse metric line
-            elif current_metric and not line.startswith('#'):
-                # Simple parser for: metric_name{label1="value1",label2="value2"} value
-                if '{' in line:
-                    name_part, rest = line.split('{', 1)
-                    labels_part, value_part = rest.split('}', 1)
-                    
-                    # Parse labels
-                    labels = {}
-                    if labels_part:
-                        for label in labels_part.split(','):
-                            if '=' in label:
-                                key, value = label.split('=', 1)
-                                labels[key.strip()] = value.strip('" ')
-                    
-                    # Parse value
-                    value = float(value_part.strip())
-                    
-                    # Add sample
-                    current_metric.add_sample(name_part, labels, value)
-                    
-        # Yield the last metric
-        if current_metric:
-            yield current_metric
+            parts = line.split()
+            if len(parts) >= 4:
+                metric_name = parts[2]
+                metric_type = parts[3]
+                current_metric = MetricFamily(metric_name, metric_type)
+                
+        # Parse metric line
+        elif current_metric and not line.startswith('#'):
+            # Simple parser for: metric_name{label1="value1",label2="value2"} value
+            if '{' in line:
+                name_part, rest = line.split('{', 1)
+                labels_part, value_part = rest.split('}', 1)
+                
+                # Parse labels
+                labels = {}
+                if labels_part:
+                    for label in labels_part.split(','):
+                        if '=' in label:
+                            key, value = label.split('=', 1)
+                            labels[key.strip()] = value.strip('" ')
+                
+                # Parse value
+                value = float(value_part.strip())
+                
+                # Add sample
+                current_metric.add_sample(name_part, labels, value)
+    
+    # Don't forget the last metric
+    if current_metric:
+        metrics.append(current_metric)
+    
+    return metrics
 
 
 class MetricFamily:

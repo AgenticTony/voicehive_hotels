@@ -3,15 +3,15 @@ Health Check Endpoint with Vault Monitoring
 Provides comprehensive health status for orchestrator and dependencies
 """
 
-from fastapi import APIRouter, HTTPException, Response
-from typing import Dict, Any, List
+from fastapi import APIRouter, HTTPException
+from typing import Dict, Any
 from datetime import datetime, timezone
 import asyncio
-import logging
+from pydantic import BaseModel
 from enum import Enum
 
-from prometheus_client import Gauge, generate_latest, CONTENT_TYPE_LATEST
-from connectors.utils.vault_client_v2 import EnhancedVaultClient, VaultError
+from prometheus_client import Gauge
+from connectors.utils.vault_client_v2 import EnhancedVaultClient
 
 logger = logging.getLogger(__name__)
 
@@ -300,23 +300,5 @@ async def connectors_health() -> Dict[str, Any]:
     return connector_status.to_dict()
 
 
-# Prometheus metrics endpoint
-@router.get("/metrics", summary="Prometheus metrics")
-async def metrics() -> Response:
-    """Prometheus metrics endpoint using official client."""
-    health = await health_checker.get_system_health()
-
-    # Update gauges
-    overall = 1 if health["status"] == "healthy" else 0
-    g_overall_health.labels(service="voicehive").set(overall)
-
-    names = [c["name"] for c in health["components"]]
-    for component in health["components"]:
-        value = 1 if component["status"] == "healthy" else 0
-        g_component_health.labels(component=component["name"]).set(value)
-        if component["name"] == "vault":
-            token_valid = 1 if component.get("details", {}).get("token_valid", False) else 0
-            g_vault_token_valid.labels(service="voicehive").set(token_valid)
-
-    content = generate_latest()
-    return Response(content=content, headers={"Content-Type": CONTENT_TYPE_LATEST})
+# Note: Prometheus metrics are exposed at the root /metrics endpoint in app.py
+# This health router focuses on health checks only

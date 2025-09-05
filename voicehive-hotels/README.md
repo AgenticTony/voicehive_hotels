@@ -61,18 +61,21 @@ VoiceHive Hotels uses a **partner-ready architecture** where 80% of integration 
    └─────────┘    └─────────┘    └──────────┘  └─────────┘  └───────────┘
 ```
 
-## 📊 Sprint 1 Progress (60% Complete)
+## 📊 Sprint 1 Progress (65% Complete)
 
-### Completed in Sprint 1:
+### Completed in Sprint 1 (Day 1):
 - **LiveKit Agent**: Full SIP participant handling and webhook integration
 - **Riva ASR Proxy**: NVIDIA client with streaming WebSocket transcription
-- **Orchestrator AI**: Azure OpenAI GPT-4 with PMS function calling
+- **Orchestrator AI**: Azure OpenAI GPT-4 with PMS function calling + metrics
 - **TTS Router Service**: Complete microservice with ElevenLabs integration
+- **Testing Infrastructure**: Prometheus metrics tests (4/4 passing)
+- **Code Quality**: Fixed circular imports, duplicate methods, missing dependencies
 
-### Next Steps:
+### Next Steps (Day 2):
 - Deploy GPU nodes for Riva server
+- Deploy all services to Kubernetes
 - Integration testing of voice pipeline
-- Load testing with concurrent calls
+- Complete orchestrator-TTS integration
 
 ## 🌟 Key Features
 
@@ -111,14 +114,16 @@ See [Capability Matrix](connectors/capability_matrix.yaml) for detailed feature 
 - **Text-to-Speech**: ElevenLabs Turbo v2 + Azure Speech - ✅ TTS Router ready
 - **Infrastructure**: Kubernetes (EKS), Terraform
 - **Monitoring**: Prometheus, Grafana, Datadog
+- **Testing**: pytest, FastAPI TestClient, prometheus_client
 
 ## 📚 Documentation
 
 - [WARP.md](WARP.md) - Development guidelines and standards
 - [Connectors WARP.md](connectors/WARP.md) - 🆕 Comprehensive development guide with MCP workflow
 - [Architecture](docs/architecture/) - System design and decisions
-- [Sprint Status](docs/sprints/sprint-1-status.md) - Sprint 1 In Progress! (60%)
+- [Sprint Status](docs/sprints/sprint-1-status.md) - Sprint 1 In Progress! (65%)
 - [Sprint 1 Plan](docs/sprints/sprint-1-plan.md) - Core voice pipeline objectives
+- [Sprint 1 Day 1 Summary](docs/sprints/sprint-1-day1-summary.md) - 🆕 Day 1 achievements
 - [Partner Integration](docs/partners/) - How to add new PMS
 - [Security](docs/security/) - GDPR compliance and security policies
 - [Connector SDK](connectors/README.md) - PMS integration framework
