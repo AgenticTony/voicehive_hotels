@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: voicehive-quota
+  namespace: voicehive
+spec:
+  hard:
+    requests.cpu: "100"
+    requests.memory: 200Gi
+    requests.storage: 1Ti
+    persistentvolumeclaims: "20"
+    services.loadbalancers: "5"
+    services.nodeports: "0"  # Disallow NodePort services
+    nvidia.com/gpu: "10"

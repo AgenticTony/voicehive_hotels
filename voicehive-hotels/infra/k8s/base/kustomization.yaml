@@ -1,0 +1,92 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: voicehive
+
+resources:
+  # Core Services
+  - deployment-orchestrator.yaml
+  - deployment-livekit-agent.yaml
+  - deployment-riva-asr-proxy.yaml
+  - deployment-tts-router.yaml
+  
+  # Configuration
+  - configmap-gdpr.yaml
+  - externalsecrets.yaml
+  
+  # Networking
+  - ingress.yaml
+  
+  # Resource Management
+  - resourcequota.yaml
+  - poddisruptionbudgets.yaml
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/name: voicehive
+  app.kubernetes.io/part-of: voicehive-hotels
+  app.kubernetes.io/managed-by: kustomize
+
+# Patches for environment-specific configurations
+patchesStrategicMerge:
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: orchestrator
+    spec:
+      template:
+        spec:
+          containers:
+          - name: orchestrator
+            env:
+            - name: AZURE_OPENAI_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: voicehive-azure-openai-secrets
+                  key: api-key
+            - name: AZURE_OPENAI_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: voicehive-azure-openai-secrets
+                  key: endpoint
+            - name: AZURE_OPENAI_DEPLOYMENT
+              valueFrom:
+                secretKeyRef:
+                  name: voicehive-azure-openai-secrets
+                  key: deployment-name
+
+# Image configuration for all deployments
+images:
+  - name: voicehive/orchestrator
+    newTag: latest
+  - name: voicehive/livekit-agent  
+    newTag: latest
+  - name: voicehive/riva-asr-proxy
+    newTag: latest
+  - name: voicehive/tts-router
+    newTag: latest
+
+# ConfigMap for common environment variables
+configMapGenerator:
+  - name: common-env
+    literals:
+      - ENVIRONMENT=production
+      - AWS_REGION=eu-west-1
+      - LOG_LEVEL=INFO
+      - METRICS_PORT=9090
+      - GDPR_MODE=true
+      - EU_REGION_ENFORCEMENT=true
+
+# Secret generation (for local development only)
+# In production, use ExternalSecrets with Vault
+secretGenerator:
+  - name: dev-secrets
+    literals:
+      - SAMPLE_KEY=change-me-in-production
+    type: Opaque
+    options:
+      annotations:
+        note: "DO NOT USE IN PRODUCTION - Use ExternalSecrets instead"
+
+# Resource quotas and Pod Disruption Budgets will be created as separate files

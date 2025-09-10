@@ -1,0 +1,222 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tts-router
+  labels:
+    app: tts-router
+    component: tts
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: tts-router
+  template:
+    metadata:
+      labels:
+        app: tts-router
+        version: blue
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: voicehive-tts-router
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - tts-router
+              topologyKey: kubernetes.io/hostname
+        # Prefer EU availability zones
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: topology.kubernetes.io/zone
+                operator: In
+                values:
+                - eu-west-1a
+                - eu-west-1b
+                - eu-west-1c
+      containers:
+      - name: tts-router
+        image: voicehive/tts-router:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: AWS_REGION
+          value: "eu-west-1"
+        # Redis Configuration
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: voicehive-secrets
+              key: redis-url
+        - name: CACHE_TTL
+          value: "86400"  # 24 hours
+        - name: MAX_CACHE_SIZE
+          value: "10737418240"  # 10GB
+        # ElevenLabs Configuration
+        - name: ELEVENLABS_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: voicehive-tts-secrets
+              key: elevenlabs-api-key
+        - name: ELEVENLABS_API_URL
+          value: "https://api.elevenlabs.io/v1"
+        - name: ELEVENLABS_DEFAULT_MODEL
+          value: "eleven_multilingual_v2"
+        # Azure Speech Configuration
+        - name: AZURE_SPEECH_KEY
+          valueFrom:
+            secretKeyRef:
+              name: voicehive-tts-secrets
+              key: azure-speech-key
+        - name: AZURE_SPEECH_REGION
+          value: "westeurope"
+        - name: AZURE_SPEECH_ENDPOINT
+          value: "https://westeurope.api.cognitive.microsoft.com/sts/v1.0"
+        # Service Configuration
+        - name: DEFAULT_ENGINE
+          value: "elevenlabs"
+        - name: FALLBACK_ENGINE
+          value: "azure"
+        - name: ENABLE_CACHING
+          value: "true"
+        - name: ENABLE_VOICE_CLONING
+          value: "true"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: MAX_TEXT_LENGTH
+          value: "5000"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: GDPR_MODE
+          value: "true"
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /.cache
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tts-router
+  labels:
+    app: tts-router
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: http
+    protocol: TCP
+    name: http
+  - port: 9090
+    targetPort: metrics
+    protocol: TCP
+    name: metrics
+  selector:
+    app: tts-router
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: voicehive-tts-router
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/voicehive-tts-router
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: tts-router-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: tts-router
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Pods
+    pods:
+      metric:
+        name: tts_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "50"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 4
+        periodSeconds: 60

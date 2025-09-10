@@ -1,0 +1,107 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: voicehive
+
+resources:
+  - ../../base
+  - networkpolicy.yaml
+
+commonLabels:
+  environment: production
+
+# Production-specific configurations
+configMapGenerator:
+  - name: prod-config
+    literals:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - ENABLE_PROFILING=false
+      - SENTRY_DSN=https://your-sentry-dsn@sentry.io/project-id
+      - DATADOG_ENABLED=true
+
+# Production image tags (using semantic versioning)
+images:
+  - name: voicehive/orchestrator
+    newTag: v1.0.0
+  - name: voicehive/livekit-agent
+    newTag: v1.0.0
+  - name: voicehive/riva-asr-proxy
+    newTag: v1.0.0
+  - name: voicehive/tts-router
+    newTag: v1.0.0
+
+# Enhanced resource limits for production
+patches:
+  - target:
+      kind: Deployment
+      name: orchestrator
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 5
+  - target:
+      kind: Deployment
+      name: livekit-agent
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 5
+  - target:
+      kind: Deployment
+      name: tts-router
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 5
+  - target:
+      kind: Deployment
+      name: riva-asr-proxy
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+
+# Production-grade autoscaling
+patchesStrategicMerge:
+  - |-
+    apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: orchestrator-hpa
+    spec:
+      minReplicas: 5
+      maxReplicas: 50
+      metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 60
+      - type: Pods
+        pods:
+          metric:
+            name: voicehive_active_calls
+          target:
+            type: AverageValue
+            averageValue: "100"
+
+# Production monitoring annotations
+patchesStrategicMerge:
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: orchestrator
+    spec:
+      template:
+        metadata:
+          annotations:
+            datadog/agent.sidecar: "true"
+            datadog/log.enabled: "true"
+            datadog/apm.enabled: "true"
+            datadog/metrics.enabled: "true"
+
+# Production security policies are managed by OPA Gatekeeper (deployed via EKS Blueprints)
+# PodSecurityPolicies have been deprecated since k8s v1.21 and removed in v1.25

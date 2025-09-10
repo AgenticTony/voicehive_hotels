@@ -1,0 +1,168 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: voicehive-ingress
+  labels:
+    app: voicehive
+    component: ingress
+  annotations:
+    # AWS ALB Ingress Controller
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:eu-west-1:123456789012:certificate/voicehive-hotels-eu
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS-1-2-2017-01
+    
+    # Security Headers
+    alb.ingress.kubernetes.io/actions.ssl-redirect: |
+      {"Type": "redirect", "RedirectConfig": {"Protocol": "HTTPS", "Port": "443", "StatusCode": "HTTP_301"}}
+    alb.ingress.kubernetes.io/security-groups: sg-voicehive-webhooks
+    
+    # WAF Protection
+    alb.ingress.kubernetes.io/wafv2-acl-arn: arn:aws:wafv2:eu-west-1:123456789012:regional/webacl/voicehive-waf
+    
+    # Access Logs
+    alb.ingress.kubernetes.io/load-balancer-attributes: |
+      access_logs.s3.enabled=true,
+      access_logs.s3.bucket=voicehive-alb-logs-eu,
+      access_logs.s3.prefix=webhooks
+    
+    # Health Check
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: '30'
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: '5'
+    
+    # EU Region Stickiness
+    alb.ingress.kubernetes.io/tags: |
+      Environment=production,
+      Region=EU,
+      Component=webhooks,
+      GDPR=compliant
+spec:
+  tls:
+  - hosts:
+    - webhooks.voicehive-hotels.eu
+    secretName: voicehive-tls-cert
+  rules:
+  # LiveKit Webhooks
+  - host: webhooks.voicehive-hotels.eu
+    http:
+      paths:
+      - path: /v1/livekit/webhook
+        pathType: Exact
+        backend:
+          service:
+            name: orchestrator
+            port:
+              number: 80
+      - path: /v1/livekit/transcription
+        pathType: Exact
+        backend:
+          service:
+            name: orchestrator
+            port:
+              number: 80
+      # Health check endpoint
+      - path: /healthz
+        pathType: Exact
+        backend:
+          service:
+            name: orchestrator
+            port:
+              number: 80
+---
+# Network Policy for webhook traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: webhook-ingress-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: orchestrator
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 8080
+  # Allow internal service communication
+  - from:
+    - podSelector:
+        matchLabels:
+          app: livekit-agent
+    ports:
+    - protocol: TCP
+      port: 8080
+  - from:
+    - podSelector:
+        matchLabels:
+          app: riva-asr-proxy
+    ports:
+    - protocol: TCP
+      port: 8080
+  - from:
+    - podSelector:
+        matchLabels:
+          app: tts-router
+    ports:
+    - protocol: TCP
+      port: 8080
+---
+# Certificate for TLS (managed by cert-manager)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: voicehive-tls-cert
+spec:
+  secretName: voicehive-tls-cert
+  dnsNames:
+  - webhooks.voicehive-hotels.eu
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# Rate Limiting for API Protection
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rate-limit-config
+data:
+  config.yaml: |
+    domain: voicehive-webhooks
+    descriptors:
+      - key: remote_address
+        rate_limit:
+          unit: minute
+          requests_per_unit: 1000
+      - key: header_match
+        value: "livekit-webhook"
+        rate_limit:
+          unit: minute
+          requests_per_unit: 5000
+---
+# Internal Service Discovery
+apiVersion: v1
+kind: Service
+metadata:
+  name: internal-orchestrator
+  labels:
+    app: orchestrator
+    internal: "true"
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service for internal discovery
+  ports:
+  - port: 8080
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app: orchestrator

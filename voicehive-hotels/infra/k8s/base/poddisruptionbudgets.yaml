@@ -1,0 +1,44 @@
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: orchestrator-pdb
+  namespace: voicehive
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: orchestrator
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: livekit-agent-pdb
+  namespace: voicehive
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: livekit-agent
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: tts-router-pdb
+  namespace: voicehive
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: tts-router
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: riva-asr-proxy-pdb
+  namespace: voicehive
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: riva-asr-proxy

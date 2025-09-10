@@ -1,0 +1,104 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: voicehive-staging
+
+resources:
+  - ../../base
+
+namePrefix: staging-
+
+commonLabels:
+  environment: staging
+
+# Reduce replicas for staging
+patchesStrategicMerge:
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: orchestrator
+    spec:
+      replicas: 1
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: livekit-agent
+    spec:
+      replicas: 1
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: tts-router
+    spec:
+      replicas: 1
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: riva-asr-proxy
+    spec:
+      replicas: 1
+
+# Override images with staging tags
+images:
+  - name: voicehive/orchestrator
+    newTag: staging
+  - name: voicehive/livekit-agent
+    newTag: staging
+  - name: voicehive/riva-asr-proxy
+    newTag: staging
+  - name: voicehive/tts-router
+    newTag: staging
+
+# Staging-specific configurations
+configMapGenerator:
+  - name: staging-config
+    behavior: merge
+    literals:
+      - ENVIRONMENT=staging
+      - LOG_LEVEL=DEBUG
+      - ENABLE_PROFILING=true
+      - LIVEKIT_URL=wss://voicehive-hotels-staging.livekit.cloud
+      - SIP_REGION=eu-frankfurt-staging
+
+# Reduced resource limits for staging
+patches:
+  - target:
+      kind: Deployment
+      labelSelector: "component in (core,media,asr,tts)"
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "256Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "250m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "512Mi"
+      - op: replace  
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "500m"
+
+# Staging ingress configuration
+patchesStrategicMerge:
+  - |-
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: voicehive-ingress
+    spec:
+      rules:
+      - host: staging-webhooks.voicehive-hotels.eu
+        http:
+          paths:
+          - path: /v1/livekit/webhook
+            pathType: Exact
+            backend:
+              service:
+                name: staging-orchestrator
+                port:
+                  number: 80
