@@ -1,6 +1,6 @@
 # Sprint 1: Status Update
-**Last Updated**: 2025-09-05 09:51:00 UTC
-**Sprint Progress**: Day 1 of 5 (65% complete)
+**Last Updated**: 2025-09-08 08:45:00 UTC
+**Sprint Progress**: Day 1 of 5 (80% complete)
 
 ## Executive Summary
 Sprint 1 is progressing rapidly! Core voice pipeline components are now implemented:
@@ -18,6 +18,7 @@ Next steps: Deploy GPU nodes for Riva, deploy services, and begin integration te
 - ✅ Implement Riva ASR client integration
 - ✅ Add Azure OpenAI GPT-4 function calling
 - ✅ Build complete TTS Router service
+- ✅ Create Kubernetes deployment manifests for all services
 
 ## Completed Items ✅
 
@@ -84,6 +85,28 @@ Next steps: Deploy GPU nodes for Riva, deploy services, and begin integration te
 - ✅ Created comprehensive test for call_events_total counter
 - ✅ Fixed test parsing issue (family names without _total suffix)
 - ✅ All Prometheus tests now passing (4/4 tests)
+
+### Kubernetes Infrastructure Hardening (Latest)
+- ✅ Fixed production Kustomize overlay ConfigMap merge issue
+- ✅ Removed privileged container mode from Riva ASR proxy deployment
+- ✅ Added SYS_NICE capability for NVIDIA GPU workloads (best practice)
+- ✅ Fixed duplicate 'resources' key in base kustomization.yaml
+- ✅ Created separate resource quota and PodDisruptionBudget files
+- ✅ Removed deprecated PodSecurityPolicy (deprecated in v1.21, removed in v1.25)
+- ✅ Added NetworkPolicy for production namespace segmentation
+- ✅ Validated all Kustomize builds (base and production overlays)
+
+### Kubernetes Deployment Infrastructure (NEW)
+- ✅ Created deployment manifests for all services (orchestrator, LiveKit agent, Riva ASR, TTS router)
+- ✅ Configured GPU node affinity for NVIDIA Riva deployment
+- ✅ Created ConfigMap for GDPR configuration mounting
+- ✅ Set up ExternalSecrets for HashiCorp Vault integration
+- ✅ Created Ingress with TLS for webhook endpoints
+- ✅ Added NetworkPolicies for secure pod communication
+- ✅ Configured HorizontalPodAutoscalers for all services
+- ✅ Set up PodDisruptionBudgets for high availability
+- ✅ Created Kustomization overlays for staging/production environments
+- ✅ Added security contexts and resource limits following best practices
 
 ## In Progress 🔄
 
@@ -190,8 +213,8 @@ Next steps: Deploy GPU nodes for Riva, deploy services, and begin integration te
 
 ### Velocity
 - **Story Points Planned**: 34
-- **Story Points Completed**: 22
-- **Story Points Remaining**: 12
+- **Story Points Completed**: 24
+- **Story Points Remaining**: 10
 
 Completed stories:
 - LiveKit Agent Foundation (5 pts)
@@ -199,6 +222,7 @@ Completed stories:
 - Azure OpenAI Integration (5 pts)
 - TTS Router Service (5 pts)
 - Metrics and Testing Infrastructure (2 pts)
+- Kubernetes Infrastructure Hardening (2 pts)
 
 ### SLO Tracking
 - **ASR Latency**: Not measured

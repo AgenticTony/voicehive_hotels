@@ -1,12 +1,14 @@
-# Sprint 1: Day 1 Final Update - App.py Modularization Complete
-**Last Updated**: 2025-09-05 13:14:40 UTC  
+# Sprint 1: Day 1 Final Update - Infrastructure Hardening Complete
+**Last Updated**: 2025-09-08 08:45:00 UTC  
 **Sprint Progress**: Day 1 Complete (80% overall)
 
 ## Executive Summary
-Day 1 objectives exceeded! All priority fixes completed AND app.py successfully modularized:
+Day 1 objectives exceeded! All priority fixes completed, app.py modularized, AND K8s infrastructure hardened:
 - ✅ All P0/P1/P2 fixes implemented and tested
 - ✅ App.py reduced from 565 lines to 169 lines (70% reduction)
 - ✅ Clean modular architecture following FastAPI best practices
+- ✅ Kubernetes infrastructure security hardened
+- ✅ Removed privileged containers and deprecated resources
 - 🚀 Ready for Day 2 deployment phase
 
 ## Major Accomplishment: App.py Modularization ✅
@@ -114,17 +116,46 @@ services/orchestrator/
 ## Sprint Metrics Update
 
 ### Velocity
-- **Story Points Completed**: 32/34 (94%)
+- **Story Points Completed**: 24/34 (71%)
 - **Technical Debt Cleared**: 100%
 - **Test Coverage Added**: 25+ new tests
+- **Security Issues Fixed**: 4 critical K8s hardening tasks
 
 ### Quality Metrics
 - **Cyclomatic Complexity**: Reduced significantly
 - **Module Cohesion**: High (single responsibility)
 - **Coupling**: Low (dependency injection)
 
+## Latest Accomplishment: Kubernetes Infrastructure Hardening ✅
+
+### Security Improvements
+1. **Container Security**
+   - Removed privileged mode from Riva ASR proxy container
+   - Added only necessary capability (SYS_NICE) for NVIDIA GPU workloads
+   - Following principle of least privilege
+
+2. **Resource Management**
+   - Fixed duplicate 'resources' key in base kustomization.yaml
+   - Created separate ResourceQuota and PodDisruptionBudget files
+   - Improved maintainability and clarity
+
+3. **Deprecated Resources**
+   - Removed PodSecurityPolicy (deprecated in v1.21, removed in v1.25)
+   - Relying on OPA Gatekeeper for pod security enforcement
+   - Future-proofing for Kubernetes upgrades
+
+4. **Network Security**
+   - Added NetworkPolicy for production namespace
+   - Proper network segmentation between services
+   - Explicit ingress/egress rules
+
+5. **Build Validation**
+   - Fixed production Kustomize overlay ConfigMap issue
+   - All Kustomize builds now validate successfully
+   - Ready for GitOps deployment
+
 ## No Blockers 🎉
-All technical challenges resolved. System architecture is clean, testable, and ready for scale.
+All technical challenges resolved. System architecture is clean, secure, testable, and ready for scale.
 
 ## Key Takeaways
 1. **Modularization improves everything** - testing, debugging, onboarding
