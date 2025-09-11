@@ -131,6 +131,19 @@ Next steps: Deploy GPU nodes for Riva, deploy services, and begin integration te
 
 **Tasks**:
 - [ ] Provision GPU nodes in EKS
+  - [ ] Create enhanced terraform files (needed for GPU support):
+    - `addons.tf` - EKS addons including NVIDIA device plugin
+    - `data.tf` - Data sources for AMIs and availability zones
+    - `eks-cluster.tf` - Enhanced EKS configuration (replaces basic eks.tf)
+    - `karpenter.tf` - Autoscaling for GPU nodes
+    - `kms.tf` - Encryption keys for GPU workloads
+    - `outputs.tf` - Cluster outputs and GPU node information
+    - `s3.tf` - Model storage buckets
+    - `vpc.tf` - Enhanced networking for GPU nodes
+  - [ ] Configure GPU node groups with p3 or g4dn instances
+  - [ ] Set up node selectors and taints for GPU workloads
+  - [ ] Configure VPC endpoints for GPU nodes
+  - [ ] Add GPU monitoring to Prometheus
 - [ ] Download Riva container images
 - [ ] Configure Riva models
 - [ ] Create deployment manifests
@@ -237,6 +250,7 @@ Completed stories:
 - All API keys must be stored in Vault
 - Use existing PMS connector factory from Sprint 0
 - Maintain backward compatibility with orchestrator API
+- **Infrastructure Note**: Enhanced terraform files for GPU support need to be created as part of Day 2-3 work. The current terraform infrastructure from Sprint 0 only includes basic EKS setup without GPU node support
 
 ---
 
