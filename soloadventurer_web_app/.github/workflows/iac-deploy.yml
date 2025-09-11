@@ -1,6 +1,7 @@
 name: IaC Deploy
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [ "main", "develop" ]
     paths: [ "infra/**" ]
@@ -35,10 +36,18 @@ jobs:
         working-directory: infra/terraform
         run: terraform init -upgrade
 
-      - name: Terraform Plan
-        id: plan
+      - name: Terraform Plan (save plan + human-readable text)
         working-directory: infra/terraform
-        run: terraform plan -out=tfplan
+        run: |
+          terraform plan -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+
+      - name: Read plan.txt
+        id: plantext
+        working-directory: infra/terraform
+        run: |
+          CONTENT="$(sed -e 's/`/`/g' plan.txt | sed -e 's/%/%25/g' -e 's/\n/%0A/g' -e 's/\r/%0D/g')"
+          echo "content=$CONTENT" >> "$GITHUB_OUTPUT"
 
       - name: Comment Plan (PRs only)
         if: github.event_name == 'pull_request'
@@ -46,8 +55,9 @@ jobs:
         with:
           header: terraform-plan
           message: |
-            ```txt
-            ${{ steps.plan.outputs.stdout }}
+            #### Terraform plan
+            ```
+            ${{ steps.plantext.outputs.content }}
             ```
 
       - name: Terraform Apply (only on push)
