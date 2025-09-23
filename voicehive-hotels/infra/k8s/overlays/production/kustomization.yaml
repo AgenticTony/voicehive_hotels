@@ -6,6 +6,76 @@ namespace: voicehive
 resources:
   - ../../base
   - networkpolicy.yaml
+  - ../../service-mesh/istio-config.yaml
+  - ../../monitoring/network-monitoring.yaml
+
+# Add security labels to all resources
+commonLabels:
+  security.voicehive.io/zero-trust: "enabled"
+  security.voicehive.io/network-policy: "enforced"
+
+# Add tier labels to deployments for micro-segmentation
+patchesStrategicMerge:
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: orchestrator
+      labels:
+        tier: core
+        database-access: "allowed"
+        vault-access: "allowed"
+        external-api-access: "allowed"
+    spec:
+      template:
+        metadata:
+          labels:
+            tier: core
+            database-access: "allowed"
+            vault-access: "allowed"
+            external-api-access: "allowed"
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: livekit-agent
+      labels:
+        tier: media
+        external-api-access: "allowed"
+    spec:
+      template:
+        metadata:
+          labels:
+            tier: media
+            external-api-access: "allowed"
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: tts-router
+      labels:
+        tier: media
+        external-api-access: "allowed"
+    spec:
+      template:
+        metadata:
+          labels:
+            tier: media
+            external-api-access: "allowed"
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: riva-asr-proxy
+      labels:
+        tier: media
+        external-api-access: "allowed"
+    spec:
+      template:
+        metadata:
+          labels:
+            tier: media
+            external-api-access: "allowed"
 
 commonLabels:
   environment: production

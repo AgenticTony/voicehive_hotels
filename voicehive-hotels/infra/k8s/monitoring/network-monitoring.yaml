@@ -1,0 +1,361 @@
+# Network Traffic Monitoring and Anomaly Detection
+# Implements comprehensive network observability for zero-trust security
+
+---
+# Cilium Network Policy for Advanced Monitoring (if using Cilium CNI)
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: network-monitoring-policy
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: monitoring
+    security.voicehive.io/policy-type: network-monitoring
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: voicehive
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: prometheus
+      toPorts:
+        - ports:
+            - port: "9090"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: voicehive
+    - toFQDNs:
+        - matchName: "api.openai.com"
+        - matchName: "*.azure.com"
+        - matchName: "*.amazonaws.com"
+        - matchName: "*.livekit.cloud"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+
+---
+# Falco Rules for Network Anomaly Detection
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-network-rules
+  namespace: falco-system
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: rules
+data:
+  network_rules.yaml: |
+    # Network Security Rules for VoiceHive
+
+    - rule: Unexpected Network Connection
+      desc: Detect unexpected network connections from VoiceHive services
+      condition: >
+        (k8s_audit and ka.verb in (create, update) and ka.target.resource=networkpolicies) or
+        (spawned_process and proc.name in (nc, ncat, netcat, socat, curl, wget) and 
+         container.image.repository contains "voicehive")
+      output: >
+        Unexpected network tool usage in VoiceHive container 
+        (user=%user.name command=%proc.cmdline container=%container.name image=%container.image.repository)
+      priority: WARNING
+      tags: [network, voicehive, security]
+
+    - rule: Suspicious Outbound Connection
+      desc: Detect suspicious outbound connections from VoiceHive services
+      condition: >
+        outbound and fd.typechar=4 and fd.ip != "" and not fd.ip in (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) and
+        container.image.repository contains "voicehive" and
+        not fd.ip in (api_whitelist) and
+        not proc.name in (orchestrator, livekit-agent, tts-router, riva-asr-proxy)
+      output: >
+        Suspicious outbound connection from VoiceHive service 
+        (connection=%fd.name user=%user.name command=%proc.cmdline container=%container.name)
+      priority: WARNING
+      tags: [network, voicehive, security]
+
+    - rule: Network Policy Violation
+      desc: Detect network policy violations in VoiceHive namespace
+      condition: >
+        k8s_audit and ka.verb in (create, update, delete) and 
+        ka.target.resource=networkpolicies and
+        ka.target.namespace=voicehive and
+        not ka.user.name in (system:serviceaccount:kube-system:generic-garbage-collector, 
+                            system:serviceaccount:voicehive:voicehive-operator)
+      output: >
+        Network policy modified in VoiceHive namespace 
+        (user=%ka.user.name verb=%ka.verb policy=%ka.target.name)
+      priority: ERROR
+      tags: [network, policy, voicehive, security]
+
+    - rule: Unauthorized Service Communication
+      desc: Detect unauthorized inter-service communication
+      condition: >
+        inbound and fd.typechar=4 and container.image.repository contains "voicehive" and
+        not (
+          (container.name contains "orchestrator" and fd.sport in (8080, 9090)) or
+          (container.name contains "livekit-agent" and fd.sport=9090) or
+          (container.name contains "tts-router" and fd.sport in (8080, 9090)) or
+          (container.name contains "riva-asr-proxy" and fd.sport in (8080, 9090))
+        )
+      output: >
+        Unauthorized service communication detected 
+        (connection=%fd.name container=%container.name image=%container.image.repository)
+      priority: WARNING
+      tags: [network, service-mesh, voicehive, security]
+
+    - rule: DNS Tunneling Attempt
+      desc: Detect potential DNS tunneling attempts
+      condition: >
+        outbound and fd.typechar=4 and fd.sport=53 and
+        container.image.repository contains "voicehive" and
+        (fd.bytes_out > 1000 or fd.bytes_in > 1000)
+      output: >
+        Potential DNS tunneling detected from VoiceHive service 
+        (connection=%fd.name bytes_out=%fd.bytes_out bytes_in=%fd.bytes_in container=%container.name)
+      priority: ERROR
+      tags: [network, dns, tunneling, voicehive, security]
+
+---
+# Prometheus ServiceMonitor for Network Metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: voicehive-network-metrics
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: voicehive
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+      honorLabels: true
+  namespaceSelector:
+    matchNames:
+      - voicehive
+
+---
+# Network Policy Monitoring Dashboard ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: network-monitoring-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: monitoring
+data:
+  network-monitoring.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "VoiceHive Network Security Monitoring",
+        "tags": ["voicehive", "network", "security"],
+        "style": "dark",
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Network Policy Violations",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "increase(falco_events_total{rule_name=\"Network Policy Violation\"}[5m])",
+                "legendFormat": "Policy Violations"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "yellow", "value": 1},
+                    {"color": "red", "value": 5}
+                  ]
+                }
+              }
+            },
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+          },
+          {
+            "id": 2,
+            "title": "Suspicious Network Connections",
+            "type": "table",
+            "targets": [
+              {
+                "expr": "falco_events_total{rule_name=~\"Suspicious.*Connection\"}",
+                "format": "table",
+                "instant": true
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+          },
+          {
+            "id": 3,
+            "title": "Service Mesh mTLS Status",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "istio_requests_total{security_policy=\"mutual_tls\"}",
+                "legendFormat": "mTLS Requests"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+          },
+          {
+            "id": 4,
+            "title": "Network Traffic Volume by Service",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(istio_tcp_received_bytes_total{destination_service_namespace=\"voicehive\"}[5m])",
+                "legendFormat": "{{destination_service_name}} - Received"
+              },
+              {
+                "expr": "rate(istio_tcp_sent_bytes_total{source_service_namespace=\"voicehive\"}[5m])",
+                "legendFormat": "{{source_service_name}} - Sent"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+          },
+          {
+            "id": 5,
+            "title": "DNS Query Anomalies",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(coredns_dns_requests_total{zone=\"cluster.local.\"}[5m])",
+                "legendFormat": "DNS Requests"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16}
+          }
+        ],
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        },
+        "refresh": "30s"
+      }
+    }
+
+---
+# Cilium Hubble Configuration for Network Observability
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hubble-config
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: cilium
+    app.kubernetes.io/component: hubble
+data:
+  config.yaml: |
+    peer-service: "hubble-peer.kube-system.svc.cluster.local:443"
+    listen-address: ":4244"
+    dial-timeout: 5s
+    retry-timeout: 30s
+    sort-buffer-len-max: 10000
+    sort-buffer-drain-timeout: 1s
+    tls-hubble-server-cert-file: /var/lib/hubble/tls/server.crt
+    tls-hubble-server-key-file: /var/lib/hubble/tls/server.key
+    tls-hubble-client-ca-files: /var/lib/hubble/tls/ca.crt
+    disable-server-tls: false
+
+---
+# Network Anomaly Detection AlertManager Rules
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: voicehive-network-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: alerting
+spec:
+  groups:
+    - name: voicehive.network.security
+      rules:
+        - alert: NetworkPolicyViolation
+          expr: increase(falco_events_total{rule_name="Network Policy Violation"}[5m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+            service: voicehive
+            component: network-security
+          annotations:
+            summary: "Network policy violation detected in VoiceHive"
+            description: "Network policy violation detected: {{ $labels.rule_name }}"
+            runbook_url: "https://docs.voicehive-hotels.com/runbooks/network-security"
+
+        - alert: SuspiciousNetworkConnection
+          expr: increase(falco_events_total{rule_name=~"Suspicious.*Connection"}[5m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+            service: voicehive
+            component: network-security
+          annotations:
+            summary: "Suspicious network connection detected"
+            description: "Suspicious network activity: {{ $labels.rule_name }}"
+            runbook_url: "https://docs.voicehive-hotels.com/runbooks/network-security"
+
+        - alert: mTLSConnectionFailure
+          expr: rate(istio_requests_total{security_policy!="mutual_tls",destination_service_namespace="voicehive"}[5m]) > 0.1
+          for: 2m
+          labels:
+            severity: warning
+            service: voicehive
+            component: service-mesh
+          annotations:
+            summary: "mTLS connection failure detected"
+            description: "Non-mTLS connections detected in service mesh for {{ $labels.destination_service_name }}"
+            runbook_url: "https://docs.voicehive-hotels.com/runbooks/service-mesh"
+
+        - alert: UnauthorizedServiceCommunication
+          expr: increase(falco_events_total{rule_name="Unauthorized Service Communication"}[5m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+            service: voicehive
+            component: service-mesh
+          annotations:
+            summary: "Unauthorized service communication detected"
+            description: "Unauthorized inter-service communication detected in VoiceHive"
+            runbook_url: "https://docs.voicehive-hotels.com/runbooks/service-mesh"
+
+        - alert: DNSTunnelingAttempt
+          expr: increase(falco_events_total{rule_name="DNS Tunneling Attempt"}[5m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+            service: voicehive
+            component: network-security
+          annotations:
+            summary: "DNS tunneling attempt detected"
+            description: "Potential DNS tunneling detected from VoiceHive service"
+            runbook_url: "https://docs.voicehive-hotels.com/runbooks/dns-security"
+
+        - alert: HighNetworkTrafficAnomaly
+          expr: rate(istio_tcp_received_bytes_total{destination_service_namespace="voicehive"}[5m]) > 100000000 # 100MB/s
+          for: 5m
+          labels:
+            severity: warning
+            service: voicehive
+            component: network-monitoring
+          annotations:
+            summary: "High network traffic detected"
+            description: "Unusually high network traffic to {{ $labels.destination_service_name }}: {{ $value }} bytes/s"
+            runbook_url: "https://docs.voicehive-hotels.com/runbooks/performance"

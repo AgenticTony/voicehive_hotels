@@ -1,0 +1,17 @@
+# Load testing specific dependencies
+locust==2.17.0
+memory-profiler==0.61.0
+psutil==5.9.6
+pytest-benchmark==4.0.0
+pytest-xdist==3.5.0
+aiofiles==23.2.1
+matplotlib==3.8.2
+numpy==1.26.2
+pandas==2.1.4
+
+# Network simulation
+netem==0.0.5
+toxiproxy-python==0.1.0
+
+# Monitoring during load tests
+py-spy==0.3.14

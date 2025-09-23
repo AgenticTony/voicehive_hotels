@@ -1,0 +1,438 @@
+# VoiceHive Hotels SLO Configuration
+# Production-grade SLI/SLO definitions with error budgets and burn rate thresholds
+
+metadata:
+  version: "1.0.0"
+  created_by: "platform_team"
+  last_updated: "2024-01-15T00:00:00Z"
+  description: "Production SLO configuration for VoiceHive Hotels"
+
+# Global SLO settings
+global_settings:
+  prometheus_url: "http://prometheus:9090"
+  alert_webhook_url: "http://alertmanager-webhook:5001/slo-alerts"
+  default_evaluation_interval: "30s"
+  default_cooldown_minutes: 15
+  default_max_executions_per_hour: 5
+
+# SLO definitions
+slos:
+  # Core Infrastructure SLOs
+  - name: "api_availability"
+    service: "orchestrator"
+    description: "API availability for all orchestrator endpoints"
+    enabled: true
+    sli:
+      name: "api_availability"
+      description: "Percentage of successful API requests (non-5xx responses)"
+      type: "availability"
+      query: |
+        sum(rate(voicehive_requests_total{status!~"5.."}[5m])) /
+        sum(rate(voicehive_requests_total[5m]))
+      unit: "percentage"
+      good_total_ratio: true
+      labels:
+        service: "orchestrator"
+        type: "availability"
+    targets:
+      - target_percentage: 99.9
+        compliance_period: "30d"
+        description: "99.9% availability over 30 days"
+      - target_percentage: 99.5
+        compliance_period: "7d"
+        description: "99.5% availability over 7 days"
+    error_budget_policy:
+      burn_rate_thresholds:
+        "1h": 14.4
+        "6h": 6.0
+        "24h": 3.0
+        "72h": 1.0
+      alert_on_exhaustion_percentage: 90.0
+      freeze_deployments_percentage: 95.0
+    tags:
+      criticality: "high"
+      team: "platform"
+      business_impact: "critical"
+
+  - name: "api_latency_p95"
+    service: "orchestrator"
+    description: "95th percentile API response latency under 2 seconds"
+    enabled: true
+    sli:
+      name: "api_latency_p95"
+      description: "Percentage of requests completed within 2 seconds"
+      type: "latency"
+      query: |
+        sum(rate(voicehive_request_duration_seconds_bucket{le="2.0"}[5m])) /
+        sum(rate(voicehive_request_duration_seconds_count[5m]))
+      unit: "percentage"
+      good_total_ratio: true
+      labels:
+        service: "orchestrator"
+        type: "latency"
+        percentile: "95"
+    targets:
+      - target_percentage: 95.0
+        compliance_period: "30d"
+        description: "95% of requests under 2s over 30 days"
+      - target_percentage: 90.0
+        compliance_period: "7d"
+        description: "90% of requests under 2s over 7 days"
+    error_budget_policy:
+      burn_rate_thresholds:
+        "1h": 7.2
+        "6h": 3.0
+        "24h": 1.5
+        "72h": 0.5
+      alert_on_exhaustion_percentage: 85.0
+      freeze_deployments_percentage: 90.0
+    tags:
+      criticality: "high"
+      team: "platform"
+
+  - name: "auth_success_rate"
+    service: "auth"
+    description: "Authentication success rate"
+    enabled: true
+    sli:
+      name: "auth_success_rate"
+      description: "Percentage of successful authentication attempts"
+      type: "availability"
+      query: |
+        (sum(rate(voicehive_auth_requests_total[5m])) - sum(rate(voicehive_auth_failures_total[5m]))) /
+        sum(rate(voicehive_auth_requests_total[5m]))
+      unit: "percentage"
+      good_total_ratio: true
+      labels:
+        service: "auth"
+        type: "security"
+    targets:
+      - target_percentage: 99.5
+        compliance_period: "30d"
+        description: "99.5% authentication success over 30 days"
+      - target_percentage: 99.0
+        compliance_period: "7d"
+        description: "99% authentication success over 7 days"
+    error_budget_policy:
+      burn_rate_thresholds:
+        "1h": 14.4
+        "6h": 6.0
+        "24h": 3.0
+        "72h": 1.0
+      alert_on_exhaustion_percentage: 95.0
+      freeze_deployments_percentage: 98.0
+    tags:
+      criticality: "critical"
+      team: "security"
+
+  # Business SLOs
+  - name: "call_success_rate"
+    service: "call-manager"
+    description: "Voice call success rate"
+    enabled: true
+    sli:
+      name: "call_success_rate"
+      description: "Percentage of successful voice calls"
+      type: "availability"
+      query: |
+        sum(rate(voicehive_call_success_total[5m])) /
+        (sum(rate(voicehive_call_success_total[5m])) + sum(rate(voicehive_call_failures_total[5m])))
+      unit: "percentage"
+      good_total_ratio: true
+      labels:
+        service: "call-manager"
+        type: "business"
+    targets:
+      - target_percentage: 99.0
+        compliance_period: "30d"
+        description: "99% call success rate over 30 days"
+      - target_percentage: 98.0
+        compliance_period: "7d"
+        description: "98% call success rate over 7 days"
+    error_budget_policy:
+      burn_rate_thresholds:
+        "1h": 14.4
+        "6h": 6.0
+        "24h": 3.0
+        "72h": 1.0
+      alert_on_exhaustion_percentage: 90.0
+      freeze_deployments_percentage: 95.0
+    tags:
+      criticality: "critical"
+      team: "voice"
+      business_impact: "high"
+
+  - name: "guest_satisfaction"
+    service: "call-manager"
+    description: "Guest satisfaction score above 4.0"
+    enabled: true
+    sli:
+      name: "guest_satisfaction"
+      description: "Average guest satisfaction score above 4.0"
+      type: "custom"
+      query: |
+        sum(rate(voicehive_guest_satisfaction_sum[24h])) /
+        sum(rate(voicehive_guest_satisfaction_count[24h])) >= 4.0
+      unit: "score"
+      good_total_ratio: true
+      labels:
+        service: "call-manager"
+        type: "business"
+        metric: "satisfaction"
+    targets:
+      - target_percentage: 90.0
+        compliance_period: "30d"
+        description: "90% of time satisfaction score above 4.0 over 30 days"
+    error_budget_policy:
+      burn_rate_thresholds:
+        "1h": 1.8
+        "6h": 0.75
+        "24h": 0.375
+        "72h": 0.125
+      alert_on_exhaustion_percentage: 80.0
+      freeze_deployments_percentage: 85.0
+    tags:
+      criticality: "high"
+      team: "product"
+      business_impact: "critical"
+
+  - name: "booking_conversion_rate"
+    service: "call-manager"
+    description: "Booking conversion rate from voice interactions"
+    enabled: true
+    sli:
+      name: "booking_conversion_rate"
+      description: "Percentage of voice interactions resulting in bookings"
+      type: "custom"
+      query: |
+        sum(rate(voicehive_booking_conversions_total{outcome="success"}[1h])) /
+        sum(rate(voicehive_booking_conversions_total[1h]))
+      unit: "percentage"
+      good_total_ratio: true
+      labels:
+        service: "call-manager"
+        type: "business"
+        metric: "conversion"
+    targets:
+      - target_percentage: 15.0
+        compliance_period: "30d"
+        description: "15% booking conversion rate over 30 days"
+    error_budget_policy:
+      burn_rate_thresholds:
+        "1h": 1.0
+        "6h": 0.5
+        "24h": 0.25
+        "72h": 0.1
+      alert_on_exhaustion_percentage: 80.0
+      freeze_deployments_percentage: 85.0
+    tags:
+      criticality: "high"
+      team: "product"
+      business_impact: "revenue"
+
+  # Integration SLOs
+  - name: "pms_connector_availability"
+    service: "pms-connector"
+    description: "PMS connector operation success rate"
+    enabled: true
+    sli:
+      name: "pms_connector_availability"
+      description: "Percentage of successful PMS operations"
+      type: "availability"
+      query: |
+        sum(rate(voicehive_pms_operations_total{status="success"}[5m])) /
+        sum(rate(voicehive_pms_operations_total[5m]))
+      unit: "percentage"
+      good_total_ratio: true
+      labels:
+        service: "pms-connector"
+        type: "integration"
+    targets:
+      - target_percentage: 98.0
+        compliance_period: "30d"
+        description: "98% PMS operation success over 30 days"
+      - target_percentage: 95.0
+        compliance_period: "7d"
+        description: "95% PMS operation success over 7 days"
+    error_budget_policy:
+      burn_rate_thresholds:
+        "1h": 3.6
+        "6h": 1.5
+        "24h": 0.75
+        "72h": 0.25
+      alert_on_exhaustion_percentage: 85.0
+      freeze_deployments_percentage: 90.0
+    tags:
+      criticality: "high"
+      team: "integrations"
+
+  - name: "pms_response_time"
+    service: "pms-connector"
+    description: "PMS response time under 5 seconds"
+    enabled: true
+    sli:
+      name: "pms_response_time"
+      description: "Percentage of PMS requests completed within 5 seconds"
+      type: "latency"
+      query: |
+        sum(rate(voicehive_pms_response_seconds_bucket{le="5.0"}[5m])) /
+        sum(rate(voicehive_pms_response_seconds_count[5m]))
+      unit: "percentage"
+      good_total_ratio: true
+      labels:
+        service: "pms-connector"
+        type: "latency"
+    targets:
+      - target_percentage: 90.0
+        compliance_period: "30d"
+        description: "90% of PMS requests under 5s over 30 days"
+      - target_percentage: 85.0
+        compliance_period: "7d"
+        description: "85% of PMS requests under 5s over 7 days"
+    error_budget_policy:
+      burn_rate_thresholds:
+        "1h": 1.8
+        "6h": 0.75
+        "24h": 0.375
+        "72h": 0.125
+      alert_on_exhaustion_percentage: 80.0
+      freeze_deployments_percentage: 85.0
+    tags:
+      criticality: "medium"
+      team: "integrations"
+
+  # Infrastructure SLOs
+  - name: "database_connection_availability"
+    service: "database"
+    description: "Database connection pool availability"
+    enabled: true
+    sli:
+      name: "database_connection_availability"
+      description: "Database connection pool below 95% utilization"
+      type: "availability"
+      query: |
+        min(voicehive_connection_pool_active / voicehive_connection_pool_max < 0.95)
+      unit: "percentage"
+      good_total_ratio: true
+      labels:
+        service: "database"
+        type: "infrastructure"
+    targets:
+      - target_percentage: 99.0
+        compliance_period: "30d"
+        description: "99% database connection availability over 30 days"
+    error_budget_policy:
+      burn_rate_thresholds:
+        "1h": 14.4
+        "6h": 6.0
+        "24h": 3.0
+        "72h": 1.0
+      alert_on_exhaustion_percentage: 95.0
+      freeze_deployments_percentage: 98.0
+    tags:
+      criticality: "critical"
+      team: "platform"
+
+# Runbook automation configuration
+runbooks:
+  api_availability_slo_violation:
+    description: "Automated response to API availability SLO violations"
+    trigger_conditions:
+      [
+        "VoiceHiveAPIAvailabilityFastBurnRate",
+        "VoiceHiveAPIAvailabilityErrorBudgetExhaustion",
+      ]
+    severity: "critical"
+    cooldown_minutes: 15
+    max_executions_per_hour: 3
+    enabled: true
+
+  api_latency_slo_violation:
+    description: "Automated response to API latency SLO violations"
+    trigger_conditions: ["VoiceHiveAPILatencyFastBurnRate"]
+    severity: "high"
+    cooldown_minutes: 10
+    max_executions_per_hour: 5
+    enabled: true
+
+  call_success_slo_violation:
+    description: "Automated response to call success rate SLO violations"
+    trigger_conditions: ["VoiceHiveCallSuccessFastBurnRate"]
+    severity: "critical"
+    cooldown_minutes: 20
+    max_executions_per_hour: 2
+    enabled: true
+
+  database_connection_exhaustion:
+    description: "Automated response to database connection pool exhaustion"
+    trigger_conditions: ["VoiceHiveConnectionPoolExhaustion"]
+    severity: "high"
+    cooldown_minutes: 5
+    max_executions_per_hour: 10
+    enabled: true
+
+# Dashboard configuration
+dashboards:
+  slo_overview:
+    title: "VoiceHive SLO Overview"
+    refresh_interval: "30s"
+    panels:
+      - slo_compliance_summary
+      - error_budget_status
+      - burn_rate_analysis
+      - business_metrics
+      - infrastructure_health
+
+  business_metrics:
+    title: "VoiceHive Business Metrics"
+    refresh_interval: "60s"
+    panels:
+      - guest_satisfaction_trends
+      - booking_conversion_rates
+      - revenue_impact_metrics
+      - call_success_by_hotel
+
+# Alert routing configuration
+alert_routing:
+  default_receiver: "platform-team"
+  routes:
+    - match:
+        severity: "critical"
+      receiver: "critical-alerts"
+      group_wait: "5s"
+      repeat_interval: "30m"
+    - match:
+        team: "security"
+      receiver: "security-alerts"
+      group_wait: "0s"
+      repeat_interval: "15m"
+    - match:
+        business_impact: "revenue"
+      receiver: "business-alerts"
+      group_wait: "10s"
+      repeat_interval: "1h"
+
+# Notification channels
+notification_channels:
+  critical-alerts:
+    - type: "pagerduty"
+      integration_key: "${PAGERDUTY_INTEGRATION_KEY}"
+    - type: "slack"
+      webhook_url: "${SLACK_CRITICAL_WEBHOOK_URL}"
+      channel: "#alerts-critical"
+    - type: "email"
+      recipients: ["oncall@voicehive.com"]
+
+  security-alerts:
+    - type: "slack"
+      webhook_url: "${SLACK_SECURITY_WEBHOOK_URL}"
+      channel: "#security-alerts"
+    - type: "email"
+      recipients: ["security@voicehive.com"]
+
+  business-alerts:
+    - type: "slack"
+      webhook_url: "${SLACK_BUSINESS_WEBHOOK_URL}"
+      channel: "#business-metrics"
+    - type: "email"
+      recipients: ["product@voicehive.com"]

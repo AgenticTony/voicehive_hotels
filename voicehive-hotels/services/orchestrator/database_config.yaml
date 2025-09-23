@@ -1,0 +1,452 @@
+# Database Performance & Reliability Configuration
+# Production-grade configuration for VoiceHive Hotels database optimization
+
+# Database Connection Configuration
+database:
+  # Primary database connection
+  host: ${DB_HOST:-localhost}
+  port: ${DB_PORT:-5432}
+  name: ${DB_NAME:-voicehive}
+  user: ${DB_USER:-postgres}
+  password: ${DB_PASSWORD} # Must be provided via environment variable
+
+  # SSL Configuration
+  ssl_mode: ${DB_SSL_MODE:-require}
+  ssl_cert: ${DB_SSL_CERT}
+  ssl_key: ${DB_SSL_KEY}
+  ssl_ca: ${DB_SSL_CA}
+
+  # Connection Pool Configuration
+  pool:
+    min_size: ${DB_POOL_MIN_SIZE:-5}
+    max_size: ${DB_POOL_MAX_SIZE:-20}
+    command_timeout: ${DB_COMMAND_TIMEOUT:-30}
+    server_settings:
+      application_name: "voicehive-orchestrator"
+      timezone: "UTC"
+      statement_timeout: "30s"
+
+# Performance Optimization Configuration
+performance:
+  # Index Strategy Configuration
+  indexing:
+    # Enable automatic index recommendations
+    auto_recommendations: true
+
+    # Slow query threshold for index analysis (milliseconds)
+    slow_query_threshold_ms: 1000
+
+    # Maximum number of index recommendations per analysis
+    max_recommendations: 20
+
+    # Index creation settings
+    create_concurrently: true
+    auto_create_high_priority: false # Require manual approval
+
+    # Index types to consider
+    supported_types:
+      - btree
+      - gin
+      - gist
+      - hash
+      - brin
+
+  # Query Performance Monitoring
+  monitoring:
+    # Enable continuous query monitoring
+    enabled: true
+
+    # Monitoring interval (seconds)
+    interval: 30
+
+    # Slow query thresholds
+    thresholds:
+      warning_ms: 500
+      critical_ms: 1000
+
+    # Query statistics collection
+    collect_pg_stat_statements: true
+
+    # Memory monitoring
+    memory_check_interval: 60
+    max_memory_mb: 512
+
+# pgBouncer Configuration
+pgbouncer:
+  # Enable pgBouncer management
+  enabled: ${PGBOUNCER_ENABLED:-true}
+
+  # Configuration directory
+  config_dir: ${PGBOUNCER_CONFIG_DIR:-/etc/pgbouncer}
+
+  # Connection settings
+  listen_addr: ${PGBOUNCER_LISTEN_ADDR:-*}
+  listen_port: ${PGBOUNCER_LISTEN_PORT:-6432}
+
+  # Pool configuration
+  pool_mode: ${PGBOUNCER_POOL_MODE:-transaction}
+  default_pool_size: ${PGBOUNCER_DEFAULT_POOL_SIZE:-25}
+  min_pool_size: ${PGBOUNCER_MIN_POOL_SIZE:-5}
+  reserve_pool_size: ${PGBOUNCER_RESERVE_POOL_SIZE:-5}
+
+  # Connection limits
+  max_client_conn: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+  max_db_connections: ${PGBOUNCER_MAX_DB_CONN:-100}
+  max_user_connections: ${PGBOUNCER_MAX_USER_CONN:-100}
+
+  # Timeouts (seconds)
+  server_idle_timeout: 600
+  server_connect_timeout: 15
+  client_idle_timeout: 0
+  client_login_timeout: 60
+  query_timeout: 0
+  query_wait_timeout: 120
+
+  # Authentication
+  auth_type: ${PGBOUNCER_AUTH_TYPE:-md5}
+
+  # Logging
+  log_connections: true
+  log_disconnections: true
+  log_pooler_errors: true
+  log_stats: true
+  stats_period: 60
+
+  # Performance tuning
+  pkt_buf: 4096
+  listen_backlog: 128
+  sbuf_loopcnt: 5
+
+  # Security
+  ignore_startup_parameters:
+    - extra_float_digits
+    - search_path
+
+# Database Migration Configuration
+migrations:
+  # Alembic configuration file path
+  alembic_config: ${ALEMBIC_CONFIG:-alembic.ini}
+
+  # Migration testing
+  testing:
+    # Enable comprehensive migration testing
+    enabled: true
+
+    # Test database URL for migration testing
+    test_database_url: ${TEST_DATABASE_URL}
+
+    # Test types to run
+    test_types:
+      - syntax
+      - schema
+      - data_integrity
+      - performance
+      - rollback
+      - compatibility
+
+    # Performance thresholds for migration testing
+    performance_thresholds:
+      max_duration_seconds: 300 # 5 minutes
+      warning_duration_seconds: 60 # 1 minute
+
+  # Rollback configuration
+  rollback:
+    # Enable rollback testing
+    test_rollback: true
+
+    # Automatic rollback on failure
+    auto_rollback_on_failure: false
+
+    # Rollback timeout (seconds)
+    timeout: 600
+
+# Database Backup Configuration
+backup:
+  # Backup type: logical, physical
+  type: ${BACKUP_TYPE:-logical}
+
+  # Storage configuration
+  storage:
+    # Storage type: local, s3, azure_blob, gcs
+    type: ${BACKUP_STORAGE_TYPE:-local}
+
+    # Local storage settings
+    local:
+      path: ${BACKUP_LOCAL_PATH:-/var/backups/postgresql}
+
+    # S3 storage settings
+    s3:
+      bucket: ${BACKUP_S3_BUCKET}
+      prefix: ${BACKUP_S3_PREFIX:-voicehive-backups}
+      region: ${BACKUP_S3_REGION:-eu-west-1}
+
+    # Azure Blob storage settings
+    azure:
+      account_name: ${BACKUP_AZURE_ACCOUNT}
+      container: ${BACKUP_AZURE_CONTAINER:-backups}
+
+    # GCS storage settings
+    gcs:
+      bucket: ${BACKUP_GCS_BUCKET}
+      prefix: ${BACKUP_GCS_PREFIX:-voicehive-backups}
+
+  # Compression settings
+  compression: ${BACKUP_COMPRESSION:-gzip}
+
+  # Encryption settings
+  encryption:
+    enabled: ${BACKUP_ENCRYPTION_ENABLED:-true}
+    key_id: ${BACKUP_ENCRYPTION_KEY_ID}
+
+  # Retention policy
+  retention:
+    days: ${BACKUP_RETENTION_DAYS:-30}
+
+    # Advanced retention rules
+    rules:
+      daily: 7 # Keep daily backups for 7 days
+      weekly: 4 # Keep weekly backups for 4 weeks
+      monthly: 12 # Keep monthly backups for 12 months
+
+  # Backup verification
+  verification:
+    # Enable backup verification after creation
+    enabled: ${BACKUP_VERIFICATION_ENABLED:-true}
+
+    # Verification types
+    types:
+      - file_integrity
+      - checksum
+      - completeness
+      - restore_test
+
+    # Restore testing frequency (days)
+    restore_test_frequency: ${BACKUP_RESTORE_TEST_FREQUENCY:-7}
+
+  # Backup scheduling
+  schedule:
+    # Full backup schedule (cron format)
+    full: ${BACKUP_FULL_SCHEDULE:-0 2 * * *} # Daily at 2 AM
+
+    # Incremental backup schedule
+    incremental: ${BACKUP_INCREMENTAL_SCHEDULE:-0 */6 * * *} # Every 6 hours
+
+    # Cleanup schedule
+    cleanup: ${BACKUP_CLEANUP_SCHEDULE:-0 3 * * 0} # Weekly on Sunday at 3 AM
+
+# Capacity Planning Configuration
+capacity:
+  # Metrics collection
+  metrics:
+    # Collection interval (seconds)
+    collection_interval: 300 # 5 minutes
+
+    # Metrics retention (days)
+    retention_days: 90
+
+    # Metric types to collect
+    types:
+      - storage
+      - connections
+      - memory
+      - cpu
+      - io
+      - queries
+
+  # Growth analysis
+  growth_analysis:
+    # Minimum data points required for trend analysis
+    min_data_points: 7
+
+    # High growth threshold (percent per day)
+    high_growth_threshold: 5.0
+
+    # Forecast types to generate
+    forecast_types:
+      - linear
+      - exponential
+
+    # Forecast periods (days)
+    forecast_periods:
+      - 7
+      - 30
+      - 90
+      - 180
+      - 365
+
+  # Capacity thresholds
+  thresholds:
+    # Storage capacity warnings
+    storage:
+      warning_percent: 75
+      critical_percent: 90
+
+    # Connection capacity warnings
+    connections:
+      warning_percent: 80
+      critical_percent: 95
+
+    # Memory usage warnings
+    memory:
+      warning_percent: 85
+      critical_percent: 95
+
+  # Alerting configuration
+  alerting:
+    # Enable capacity alerting
+    enabled: true
+
+    # Alert channels
+    channels:
+      - prometheus
+      - log
+      - webhook # If webhook URL configured
+
+    # Webhook configuration
+    webhook:
+      url: ${CAPACITY_WEBHOOK_URL}
+      timeout: 30
+      retry_count: 3
+
+# Monitoring & Observability Configuration
+monitoring:
+  # Prometheus metrics
+  prometheus:
+    # Enable Prometheus metrics export
+    enabled: ${PROMETHEUS_ENABLED:-true}
+
+    # Metrics port
+    port: ${PROMETHEUS_PORT:-9090}
+
+    # Metrics path
+    path: ${PROMETHEUS_PATH:-/metrics}
+
+    # Custom labels
+    labels:
+      service: voicehive-orchestrator
+      component: database-reliability
+      environment: ${ENVIRONMENT:-production}
+
+  # Logging configuration
+  logging:
+    # Log level
+    level: ${LOG_LEVEL:-INFO}
+
+    # Log format: json, text
+    format: ${LOG_FORMAT:-json}
+
+    # Enable structured logging
+    structured: true
+
+    # Log database operations
+    log_db_operations: true
+
+    # Log performance metrics
+    log_performance_metrics: true
+
+  # Health checks
+  health_checks:
+    # Enable health check endpoint
+    enabled: true
+
+    # Health check port
+    port: ${HEALTH_CHECK_PORT:-8080}
+
+    # Health check path
+    path: ${HEALTH_CHECK_PATH:-/health}
+
+    # Check intervals (seconds)
+    intervals:
+      database: 30
+      pgbouncer: 60
+      backups: 300
+      capacity: 300
+
+# Security Configuration
+security:
+  # Audit logging
+  audit:
+    # Enable audit logging
+    enabled: ${AUDIT_LOGGING_ENABLED:-true}
+
+    # Audit log level
+    level: ${AUDIT_LOG_LEVEL:-INFO}
+
+    # Events to audit
+    events:
+      - database_operations
+      - backup_operations
+      - migration_operations
+      - configuration_changes
+      - security_events
+
+  # Access control
+  access_control:
+    # Enable role-based access control
+    enabled: true
+
+    # Default permissions
+    default_permissions:
+      - read_metrics
+      - read_status
+
+    # Admin permissions
+    admin_permissions:
+      - read_metrics
+      - read_status
+      - manage_backups
+      - manage_migrations
+      - manage_configuration
+
+  # Encryption
+  encryption:
+    # Encrypt sensitive configuration
+    encrypt_config: ${ENCRYPT_CONFIG:-true}
+
+    # Encryption key
+    key: ${ENCRYPTION_KEY}
+
+    # Encrypt backup data
+    encrypt_backups: ${ENCRYPT_BACKUPS:-true}
+
+# Environment-specific overrides
+environments:
+  development:
+    database:
+      pool:
+        min_size: 2
+        max_size: 5
+    backup:
+      retention:
+        days: 7
+    capacity:
+      metrics:
+        collection_interval: 600 # 10 minutes
+
+  staging:
+    database:
+      pool:
+        min_size: 3
+        max_size: 10
+    backup:
+      retention:
+        days: 14
+    capacity:
+      metrics:
+        collection_interval: 300 # 5 minutes
+
+  production:
+    database:
+      pool:
+        min_size: 5
+        max_size: 20
+    backup:
+      retention:
+        days: 30
+      verification:
+        restore_test_frequency: 7
+    capacity:
+      metrics:
+        collection_interval: 300 # 5 minutes
+      alerting:
+        enabled: true

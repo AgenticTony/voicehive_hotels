@@ -6,6 +6,7 @@ pydantic-settings==2.1.0
 
 # Async HTTP client
 httpx==0.25.2
+aiohttp==3.9.1
 
 # Database
 asyncpg==0.29.0
@@ -27,6 +28,17 @@ structlog==23.2.0
 cryptography==41.0.7
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# JWT and Authentication
+PyJWT==2.8.0
+bcrypt==4.1.2
+
+# HashiCorp Vault client
+hvac==2.1.0
+
+# Redis for session management
+aioredis==2.0.1
 
 # Circuit breaker
 circuitbreaker==1.4.0
@@ -41,9 +53,14 @@ python-dateutil==2.8.2
 pytz==2023.3
 pyyaml==6.0.1
 python-multipart==0.0.6
+psutil==5.9.6
+
+# Performance optimization dependencies
+asyncpg==0.29.0
+aiofiles==23.2.1
 
 # Testing (moved to requirements-dev.txt in production)
 pytest==7.4.3
 pytest-asyncio==0.21.1
 pytest-cov==4.1.0
-httpx-mock==0.26.0
+respx==0.20.2

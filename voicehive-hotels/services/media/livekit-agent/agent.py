@@ -200,19 +200,22 @@ class VoiceHiveAgent:
                     break
                     
                 # Process audio frame
-                # In a real implementation, this would:
-                # 1. Convert frame to appropriate format
-                # 2. Send to Riva ASR via gRPC
-                # 3. Handle transcription results
-                
-                # For now, just log frame info
-                logger.debug(
-                    f"Audio frame: samples={frame.samples_per_channel}, "
-                    f"sample_rate={frame.sample_rate}, channels={frame.num_channels}"
-                )
-                
-                # TODO: Send to ASR service
-                # await self.send_audio_to_asr(frame)
+                # Convert frame to appropriate format and send to ASR
+                try:
+                    # Convert LiveKit audio frame to bytes
+                    audio_data = await self._convert_frame_to_bytes(frame)
+                    
+                    # Send to ASR service
+                    await self.send_audio_to_asr(audio_data, frame.sample_rate)
+                    
+                    logger.debug(
+                        f"Audio frame processed: samples={frame.samples_per_channel}, "
+                        f"sample_rate={frame.sample_rate}, channels={frame.num_channels}"
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Error processing audio frame: {e}")
+                    # Continue processing other frames
                 
         except asyncio.CancelledError:
             logger.info("Audio streaming cancelled")
@@ -319,6 +322,82 @@ class VoiceHiveAgent:
         except Exception as e:
             logger.error(f"Error notifying orchestrator: {e}")
             
+    async def _convert_frame_to_bytes(self, frame: rtc.AudioFrame) -> bytes:
+        """Convert LiveKit audio frame to raw bytes for ASR"""
+        try:
+            # LiveKit AudioFrame provides direct access to audio data
+            # The frame.data is already in the correct format (16-bit PCM)
+            import numpy as np
+            
+            # Get audio data as numpy array
+            # LiveKit frames are in planar format, convert to interleaved if needed
+            if frame.num_channels == 1:
+                # Mono audio - direct conversion
+                audio_data = frame.data
+            else:
+                # Multi-channel audio - convert to mono by averaging channels
+                samples_per_channel = frame.samples_per_channel
+                audio_array = np.frombuffer(frame.data, dtype=np.int16)
+                
+                # Reshape to [channels, samples] and average across channels
+                audio_array = audio_array.reshape(frame.num_channels, samples_per_channel)
+                mono_audio = np.mean(audio_array, axis=0).astype(np.int16)
+                audio_data = mono_audio.tobytes()
+            
+            return audio_data
+            
+        except Exception as e:
+            logger.error(f"Error converting audio frame: {e}")
+            # Return empty bytes on error
+            return b''
+    
+    async def send_audio_to_asr(self, audio_data: bytes, sample_rate: int):
+        """Send audio data to ASR service for transcription"""
+        try:
+            import base64
+            import aiohttp
+            
+            # Encode audio data as base64
+            audio_b64 = base64.b64encode(audio_data).decode()
+            
+            # Prepare request payload
+            payload = {
+                "audio_data": audio_b64,
+                "language": self.call_context.language,
+                "sample_rate": sample_rate,
+                "encoding": "LINEAR16"
+            }
+            
+            # Send to ASR service
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.call_context.asr_url}/transcribe",
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=5.0)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        
+                        # Extract transcription results
+                        transcript = result.get("transcript", "")
+                        confidence = result.get("confidence", 0.0)
+                        
+                        # Only process if we have meaningful transcription
+                        if transcript.strip() and confidence > 0.3:
+                            await self.handle_transcription(
+                                text=transcript,
+                                is_final=True,  # Offline transcription is always final
+                                confidence=confidence
+                            )
+                    else:
+                        logger.warning(f"ASR service returned status {response.status}")
+                        
+        except asyncio.TimeoutError:
+            logger.warning("ASR service timeout")
+        except Exception as e:
+            logger.error(f"Error sending audio to ASR: {e}")
+    
     async def cleanup(self):
         """Clean up resources"""
         logger.info("Cleaning up agent resources")

@@ -1,0 +1,261 @@
+# Enhanced Testing Configuration
+# Configuration for comprehensive testing coverage enhancement
+
+# Coverage Configuration
+coverage:
+  target_percentage: 90.0
+  current_baseline: 70.0
+  exclude_patterns:
+    - "*/tests/*"
+    - "*/test_*"
+    - "*/__pycache__/*"
+    - "*/migrations/*"
+    - "*/venv/*"
+    - "*/node_modules/*"
+  include_patterns:
+    - "services/orchestrator/*.py"
+    - "connectors/*.py"
+  fail_under: 90.0
+  show_missing: true
+  skip_covered: false
+
+# Load Testing Configuration
+load_testing:
+  concurrent_users: 50
+  requests_per_user: 100
+  test_duration_seconds: 300
+  max_response_time_ms: 2000
+  max_error_rate_percent: 1.0
+  ramp_up_time_seconds: 30
+  ramp_down_time_seconds: 30
+
+  # Endpoint-specific configurations
+  endpoints:
+    "/auth/login":
+      concurrent_users: 20
+      requests_per_user: 50
+      max_response_time_ms: 500
+    "/health":
+      concurrent_users: 100
+      requests_per_user: 20
+      max_response_time_ms: 50
+    "/calls":
+      concurrent_users: 25
+      requests_per_user: 20
+      max_response_time_ms: 800
+
+# Chaos Engineering Configuration
+chaos_engineering:
+  failure_injection_rate: 0.1
+  chaos_duration_seconds: 60
+  recovery_timeout_seconds: 120
+
+  # Failure scenarios
+  scenarios:
+    network_latency:
+      enabled: true
+      min_delay_ms: 1000
+      max_delay_ms: 3000
+      failure_rate: 0.3
+
+    network_partition:
+      enabled: true
+      duration_seconds: 30
+      target_services: ["pms_connector", "tts_service"]
+
+    service_unavailable:
+      enabled: true
+      failure_rate: 0.2
+      duration_seconds: 45
+
+    memory_pressure:
+      enabled: true
+      memory_allocation_mb: 500
+      duration_seconds: 45
+
+    cpu_spike:
+      enabled: true
+      cpu_load_percent: 90
+      duration_seconds: 30
+
+# Security Testing Configuration
+security_testing:
+  scan_depth: "comprehensive" # basic, standard, comprehensive
+  vulnerability_threshold: "medium" # low, medium, high, critical
+
+  # Test categories
+  categories:
+    sql_injection: true
+    xss: true
+    csrf: true
+    authentication_bypass: true
+    authorization_bypass: true
+    jwt_vulnerabilities: true
+    input_validation: true
+    information_disclosure: true
+    insecure_headers: true
+    rate_limiting_bypass: true
+
+  # Payload configurations
+  payloads:
+    sql_injection_count: 10
+    xss_payload_count: 15
+    fuzzing_iterations: 100
+
+  # Security headers requirements
+  required_headers:
+    - "X-Content-Type-Options"
+    - "X-Frame-Options"
+    - "X-XSS-Protection"
+    - "Strict-Transport-Security"
+    - "Content-Security-Policy"
+    - "Referrer-Policy"
+
+# Performance Testing Configuration
+performance_testing:
+  baseline_response_time_ms: 500
+  regression_threshold: 0.2 # 20% degradation
+  memory_threshold_mb: 512
+  cpu_threshold_percent: 80
+
+  # Performance test scenarios
+  scenarios:
+    authentication:
+      concurrent_users: 20
+      requests_per_user: 50
+      regression_threshold: 0.15
+
+    api_endpoints:
+      concurrent_users: 30
+      requests_per_user: 25
+      regression_threshold: 0.2
+
+    database_operations:
+      concurrent_users: 15
+      requests_per_user: 20
+      regression_threshold: 0.25
+
+    memory_intensive:
+      concurrent_users: 10
+      requests_per_user: 5
+      regression_threshold: 0.3
+
+# Contract Testing Configuration
+contract_testing:
+  pms_connector_types:
+    - "apaleo"
+    - "opera"
+    - "protel"
+    - "mews"
+    - "cloudbeds"
+
+  validation_strict: true
+  schema_validation: true
+
+  # Contract expectations
+  timeouts:
+    default_timeout_seconds: 30
+    webhook_timeout_seconds: 10
+    streaming_timeout_seconds: 60
+
+  # Response validation
+  validate_status_codes: true
+  validate_headers: true
+  validate_response_schema: true
+  validate_request_schema: true
+
+# Test Environment Configuration
+environment:
+  base_url: "http://localhost:8000"
+  test_database_url: "postgresql://test:test@localhost:5432/test_db"
+  test_redis_url: "redis://localhost:6379/1"
+
+  # Mock services
+  mock_services:
+    pms_connector: true
+    tts_service: true
+    livekit_service: true
+    vault_service: true
+
+  # Test data
+  test_data_dir: "test_data"
+  fixtures_dir: "fixtures"
+  contracts_dir: "test_contracts"
+
+# Reporting Configuration
+reporting:
+  output_dir: "test_reports"
+  generate_html: true
+  generate_json: true
+  generate_junit_xml: true
+  generate_coverage_html: true
+
+  # Report formats
+  formats:
+    - "html"
+    - "json"
+    - "junit"
+    - "text"
+
+  # Retention
+  keep_reports: 10
+  archive_old_reports: true
+
+# CI/CD Integration
+ci_cd:
+  fail_on_coverage_below: 90.0
+  fail_on_security_critical: true
+  fail_on_performance_regression: true
+  fail_on_contract_violation: true
+
+  # Parallel execution
+  parallel_workers: 4
+  test_timeout_seconds: 1800 # 30 minutes
+
+  # Notifications
+  notifications:
+    slack_webhook: null
+    email_recipients: []
+    teams_webhook: null
+
+# Logging Configuration
+logging:
+  level: "INFO" # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  # Log files
+  files:
+    main_log: "test_reports/enhanced_testing.log"
+    coverage_log: "test_reports/coverage.log"
+    security_log: "test_reports/security.log"
+    performance_log: "test_reports/performance.log"
+
+  # Log rotation
+  max_file_size_mb: 10
+  backup_count: 5
+
+# Resource Limits
+resource_limits:
+  max_memory_mb: 2048
+  max_cpu_percent: 80
+  max_disk_usage_mb: 1024
+  max_network_connections: 1000
+
+  # Test execution limits
+  max_test_duration_seconds: 3600 # 1 hour
+  max_concurrent_tests: 10
+  max_retry_attempts: 3
+
+# Feature Flags
+feature_flags:
+  enable_chaos_testing: true
+  enable_security_scanning: true
+  enable_performance_profiling: true
+  enable_contract_validation: true
+  enable_load_testing: true
+  enable_coverage_enhancement: true
+
+  # Experimental features
+  enable_ai_test_generation: false
+  enable_mutation_testing: false
+  enable_property_based_testing: false

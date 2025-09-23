@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
   REGISTRY: ghcr.io
@@ -16,28 +16,28 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Run TruffleHog
-      uses: trufflesecurity/trufflehog@main
-      with:
-        path: ./
-        base: ${{ github.event.repository.default_branch }}
-        head: HEAD
-        extra_args: --debug --only-verified
-    
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'fs'
-        scan-ref: '.'
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-    
-    - name: Upload Trivy results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v2
-      with:
-        sarif_file: 'trivy-results.sarif'
+      - uses: actions/checkout@v4
+
+      - name: Run TruffleHog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --debug --only-verified
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-results.sarif"
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: "trivy-results.sarif"
 
   test-python:
     name: Test Python Services
@@ -46,74 +46,74 @@ jobs:
       matrix:
         service: [orchestrator, connectors, riva-proxy, tts-router]
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-        cache: 'pip'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements-dev.txt
-    
-    - name: Run linting
-      run: |
-        ruff check services/${{ matrix.service }} connectors/
-        mypy services/${{ matrix.service }} connectors/ --strict || true
-    
-    - name: Run tests
-      run: |
-        pytest -v --cov=services/${{ matrix.service }} --cov=connectors \
-          --cov-report=xml --cov-report=term \
-          --junit-xml=test-results-${{ matrix.service }}.xml
-    
-    - name: Upload coverage
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        flags: ${{ matrix.service }}
-        name: ${{ matrix.service }}-coverage
-    
-    - name: Upload test results
-      if: always()
-      uses: actions/upload-artifact@v3
-      with:
-        name: test-results-${{ matrix.service }}
-        path: test-results-${{ matrix.service }}.xml
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run linting
+        run: |
+          ruff check services/${{ matrix.service }} connectors/
+          mypy services/${{ matrix.service }} connectors/ --strict || true
+
+      - name: Run tests
+        run: |
+          pytest -v --cov=services/${{ matrix.service }} --cov=connectors \
+            --cov-report=xml --cov-report=term \
+            --junit-xml=test-results-${{ matrix.service }}.xml
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: ${{ matrix.service }}
+          name: ${{ matrix.service }}-coverage
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results-${{ matrix.service }}
+          path: test-results-${{ matrix.service }}.xml
 
   test-connectors:
     name: Test PMS Connectors
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r connectors/requirements.txt
-        pip install -r requirements-dev.txt
-    
-    - name: Run golden contract tests
-      run: |
-        pytest connectors/tests/golden_contract -v --junit-xml=golden-test-results.xml
-    
-    - name: Upload test results
-      if: always()
-      uses: actions/upload-artifact@v3
-      with:
-        name: golden-test-results
-        path: golden-test-results.xml
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r connectors/requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run golden contract tests
+        run: |
+          pytest connectors/tests/golden_contract -v --junit-xml=golden-test-results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: golden-test-results
+          path: golden-test-results.xml
 
   build-docker:
-    name: Build Docker Images
+    name: Build & Secure Docker Images
     runs-on: ubuntu-latest
     needs: [security-scan, test-python, test-connectors]
     if: github.event_name == 'push'
@@ -130,68 +130,210 @@ jobs:
             context: ./services/tts/router
           - service: media-agent
             context: ./services/media/livekit-agent
-    
+
     permissions:
       contents: read
       packages: write
-    
+      security-events: write
+      id-token: write
+      attestations: write
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=sha
-    
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: ${{ matrix.context }}
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: "v2.2.2"
+
+      - name: Install Syft for SBOM generation
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Install Grype for vulnerability scanning
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          load: true
+          tags: ${{ matrix.service }}:scan
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.service }}:scan
+          format: "sarif"
+          output: "trivy-${{ matrix.service }}.sarif"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: "trivy-${{ matrix.service }}.sarif"
+          category: "container-${{ matrix.service }}"
+
+      - name: Run Grype vulnerability scanner
+        run: |
+          grype ${{ matrix.service }}:scan -o sarif --file grype-${{ matrix.service }}.sarif
+          grype ${{ matrix.service }}:scan --fail-on high
+
+      - name: Upload Grype results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: "grype-${{ matrix.service }}.sarif"
+          category: "grype-${{ matrix.service }}"
+
+      - name: Generate SBOM with Syft
+        run: |
+          syft ${{ matrix.service }}:scan -o spdx-json=sbom-${{ matrix.service }}.spdx.json
+          syft ${{ matrix.service }}:scan -o cyclonedx-json=sbom-${{ matrix.service }}.cyclonedx.json
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: sbom-${{ matrix.service }}
+          path: |
+            sbom-${{ matrix.service }}.spdx.json
+            sbom-${{ matrix.service }}.cyclonedx.json
+
+      - name: Build and push multi-arch image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate SBOM for pushed image
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom-pushed-${{ matrix.service }}.spdx.json
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom-pushed-${{ matrix.service }}.spdx.json
+          push-to-registry: true
+
+      - name: Generate build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Sign container image with Cosign
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          echo "Signing image: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}@${{ steps.build.outputs.digest }}"
+          cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}@${{ steps.build.outputs.digest }}
+
+      - name: Verify signature
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          cosign verify ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}@${{ steps.build.outputs.digest }} \
+            --certificate-identity-regexp="https://github.com/${{ github.repository }}" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com"
+
+      - name: Generate security report
+        run: |
+          echo "# Security Report for ${{ matrix.service }}" > security-report-${{ matrix.service }}.md
+          echo "" >> security-report-${{ matrix.service }}.md
+          echo "## Image Details" >> security-report-${{ matrix.service }}.md
+          echo "- **Image**: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}@${{ steps.build.outputs.digest }}" >> security-report-${{ matrix.service }}.md
+          echo "- **Build Date**: ${{ github.event.head_commit.timestamp }}" >> security-report-${{ matrix.service }}.md
+          echo "- **VCS Ref**: ${{ github.sha }}" >> security-report-${{ matrix.service }}.md
+          echo "- **Version**: ${{ steps.meta.outputs.version }}" >> security-report-${{ matrix.service }}.md
+          echo "" >> security-report-${{ matrix.service }}.md
+          echo "## Security Scans" >> security-report-${{ matrix.service }}.md
+          echo "- ✅ Trivy vulnerability scan completed" >> security-report-${{ matrix.service }}.md
+          echo "- ✅ Grype vulnerability scan completed" >> security-report-${{ matrix.service }}.md
+          echo "- ✅ SBOM generated and attested" >> security-report-${{ matrix.service }}.md
+          echo "- ✅ Build provenance attested" >> security-report-${{ matrix.service }}.md
+          echo "- ✅ Image signed with Cosign" >> security-report-${{ matrix.service }}.md
+          echo "- ✅ Signature verified" >> security-report-${{ matrix.service }}.md
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-report-${{ matrix.service }}
+          path: security-report-${{ matrix.service }}.md
 
   terraform-validate:
     name: Validate Terraform
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: 1.6.0
-    
-    - name: Terraform Init
-      working-directory: ./infra/terraform
-      run: terraform init -backend=false
-    
-    - name: Terraform Format Check
-      working-directory: ./infra/terraform
-      run: terraform fmt -check
-    
-    - name: Terraform Validate
-      working-directory: ./infra/terraform
-      run: terraform validate
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      - name: Terraform Init
+        working-directory: ./infra/terraform
+        run: terraform init -backend=false
+
+      - name: Terraform Format Check
+        working-directory: ./infra/terraform
+        run: terraform fmt -check
+
+      - name: Terraform Validate
+        working-directory: ./infra/terraform
+        run: terraform validate
 
   deploy-staging:
     name: Deploy to Staging
@@ -201,31 +343,31 @@ jobs:
     environment:
       name: staging
       url: https://staging.voicehive-hotels.eu
-    
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Update kubeconfig
-      run: |
-        aws eks update-kubeconfig --name voicehive-staging --region ${{ env.AWS_REGION }}
-    
-    - name: Deploy to Kubernetes
-      run: |
-        kubectl apply -k infra/k8s/overlays/staging
-        kubectl rollout status deployment/orchestrator -n voicehive
-        kubectl rollout status deployment/connectors -n voicehive
-    
-    - name: Run smoke tests
-      run: |
-        sleep 30
-        curl -f https://staging.voicehive-hotels.eu/healthz || exit 1
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name voicehive-staging --region ${{ env.AWS_REGION }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -k infra/k8s/overlays/staging
+          kubectl rollout status deployment/orchestrator -n voicehive
+          kubectl rollout status deployment/connectors -n voicehive
+
+      - name: Run smoke tests
+        run: |
+          sleep 30
+          curl -f https://staging.voicehive-hotels.eu/healthz || exit 1
 
   deploy-production:
     name: Deploy to Production
@@ -235,83 +377,83 @@ jobs:
     environment:
       name: production
       url: https://api.voicehive-hotels.eu
-    
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Update kubeconfig
-      run: |
-        aws eks update-kubeconfig --name voicehive-production --region ${{ env.AWS_REGION }}
-    
-    - name: Deploy to Kubernetes (Blue-Green)
-      run: |
-        # Deploy to green environment
-        kubectl apply -k infra/k8s/overlays/production/green
-        
-        # Wait for green to be ready
-        kubectl rollout status deployment/orchestrator-green -n voicehive
-        kubectl rollout status deployment/connectors-green -n voicehive
-        
-        # Run tests against green
-        sleep 30
-        GREEN_URL=$(kubectl get ingress -n voicehive green-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-        curl -f https://$GREEN_URL/healthz || exit 1
-        
-        # Switch traffic to green
-        kubectl patch service orchestrator -n voicehive -p '{"spec":{"selector":{"version":"green"}}}'
-        kubectl patch service connectors -n voicehive -p '{"spec":{"selector":{"version":"green"}}}'
-        
-        # Clean up old blue deployment
-        sleep 60
-        kubectl delete -k infra/k8s/overlays/production/blue || true
-        
-        # Rename green to blue for next deployment
-        kubectl label deployment orchestrator-green version=blue --overwrite -n voicehive
-        kubectl label deployment connectors-green version=blue --overwrite -n voicehive
-    
-    - name: Notify deployment
-      uses: 8398a7/action-slack@v3
-      with:
-        status: ${{ job.status }}
-        text: Production deployment ${{ job.status }}
-        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
-      if: always()
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name voicehive-production --region ${{ env.AWS_REGION }}
+
+      - name: Deploy to Kubernetes (Blue-Green)
+        run: |
+          # Deploy to green environment
+          kubectl apply -k infra/k8s/overlays/production/green
+
+          # Wait for green to be ready
+          kubectl rollout status deployment/orchestrator-green -n voicehive
+          kubectl rollout status deployment/connectors-green -n voicehive
+
+          # Run tests against green
+          sleep 30
+          GREEN_URL=$(kubectl get ingress -n voicehive green-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          curl -f https://$GREEN_URL/healthz || exit 1
+
+          # Switch traffic to green
+          kubectl patch service orchestrator -n voicehive -p '{"spec":{"selector":{"version":"green"}}}'
+          kubectl patch service connectors -n voicehive -p '{"spec":{"selector":{"version":"green"}}}'
+
+          # Clean up old blue deployment
+          sleep 60
+          kubectl delete -k infra/k8s/overlays/production/blue || true
+
+          # Rename green to blue for next deployment
+          kubectl label deployment orchestrator-green version=blue --overwrite -n voicehive
+          kubectl label deployment connectors-green version=blue --overwrite -n voicehive
+
+      - name: Notify deployment
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: Production deployment ${{ job.status }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        if: always()
 
   performance-test:
     name: Performance Test
     runs-on: ubuntu-latest
     needs: [deploy-staging]
     if: github.ref == 'refs/heads/develop'
-    
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Run load tests
-      run: |
-        pip install locust
-        locust -f tests/load/locustfile.py \
-          --headless \
-          --users 50 \
-          --spawn-rate 5 \
-          --run-time 5m \
-          --host https://staging.voicehive-hotels.eu \
-          --html performance-report.html
-    
-    - name: Upload performance report
-      uses: actions/upload-artifact@v3
-      with:
-        name: performance-report
-        path: performance-report.html
-    
-    - name: Check SLA compliance
-      run: |
-        # Check if P95 latency is under 500ms
-        # This would parse the performance report and fail if SLA is violated
-        python scripts/check-sla.py performance-report.html
+      - uses: actions/checkout@v4
+
+      - name: Run load tests
+        run: |
+          pip install locust
+          locust -f tests/load/locustfile.py \
+            --headless \
+            --users 50 \
+            --spawn-rate 5 \
+            --run-time 5m \
+            --host https://staging.voicehive-hotels.eu \
+            --html performance-report.html
+
+      - name: Upload performance report
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-report
+          path: performance-report.html
+
+      - name: Check SLA compliance
+        run: |
+          # Check if P95 latency is under 500ms
+          # This would parse the performance report and fail if SLA is violated
+          python scripts/check-sla.py performance-report.html

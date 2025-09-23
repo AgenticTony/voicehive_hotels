@@ -1,0 +1,444 @@
+# VoiceHive Hotels - Pod Security Standards
+# Comprehensive security policies for container runtime
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: voicehive
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    security.voicehive.com/tier: production
+    security.voicehive.com/compliance: gdpr
+
+---
+# Pod Security Policy (for clusters that still support it)
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: voicehive-restricted
+  namespace: voicehive
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: "runtime/default"
+    seccomp.security.alpha.kubernetes.io/defaultProfileName: "runtime/default"
+    apparmor.security.beta.kubernetes.io/allowedProfileNames: "runtime/default"
+    apparmor.security.beta.kubernetes.io/defaultProfileName: "runtime/default"
+spec:
+  # Prevent privileged containers
+  privileged: false
+
+  # Prevent privilege escalation
+  allowPrivilegeEscalation: false
+
+  # Require containers to run as non-root
+  runAsUser:
+    rule: "MustRunAsNonRoot"
+
+  # Require specific user ID (nonroot user from distroless)
+  runAsGroup:
+    rule: "MustRunAs"
+    ranges:
+      - min: 65534
+        max: 65534
+
+  # Set filesystem group
+  fsGroup:
+    rule: "MustRunAs"
+    ranges:
+      - min: 65534
+        max: 65534
+
+  # Drop all capabilities
+  requiredDropCapabilities:
+    - ALL
+
+  # No additional capabilities allowed
+  allowedCapabilities: []
+
+  # Default capabilities to drop
+  defaultAllowPrivilegeEscalation: false
+
+  # Allowed volume types (minimal set)
+  volumes:
+    - "configMap"
+    - "emptyDir"
+    - "projected"
+    - "secret"
+    - "downwardAPI"
+    - "persistentVolumeClaim"
+
+  # Host network restrictions
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+
+  # Port restrictions
+  hostPorts:
+    - min: 0
+      max: 0 # No host ports allowed
+
+  # SELinux (if applicable)
+  seLinux:
+    rule: "RunAsAny"
+
+  # Read-only root filesystem
+  readOnlyRootFilesystem: true
+
+  # Seccomp profile
+  seccompProfile:
+    type: RuntimeDefault
+
+---
+# ClusterRole for Pod Security Policy
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: voicehive-psp-user
+rules:
+  - apiGroups: ["policy"]
+    resources: ["podsecuritypolicies"]
+    verbs: ["use"]
+    resourceNames:
+      - voicehive-restricted
+
+---
+# ClusterRoleBinding for Pod Security Policy
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: voicehive-psp-binding
+roleRef:
+  kind: ClusterRole
+  name: voicehive-psp-user
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: voicehive-orchestrator
+    namespace: voicehive
+  - kind: ServiceAccount
+    name: voicehive-connectors
+    namespace: voicehive
+  - kind: ServiceAccount
+    name: voicehive-media
+    namespace: voicehive
+
+---
+# Network Policy - Default Deny All
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: voicehive-default-deny
+  namespace: voicehive
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# Network Policy - Allow Internal Communication
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: voicehive-internal-communication
+  namespace: voicehive
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: voicehive
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+    # Allow from monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+    # Allow internal communication
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: voicehive
+  egress:
+    # Allow to internal services
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: voicehive
+    # Allow DNS
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow HTTPS for external APIs
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow database connections
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow Redis connections
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# Network Policy - Orchestrator Specific
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: voicehive-orchestrator-policy
+  namespace: voicehive
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: orchestrator
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from load balancer/ingress
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow from connectors
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: connectors
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow to connectors
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: connectors
+      ports:
+        - protocol: TCP
+          port: 8081
+    # Allow to TTS router
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tts-router
+      ports:
+        - protocol: TCP
+          port: 9000
+    # Allow to ASR proxy
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: riva-proxy
+      ports:
+        - protocol: TCP
+          port: 8001
+
+---
+# Security Context Constraints (OpenShift)
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: voicehive-restricted-scc
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegedContainer: false
+allowedCapabilities: []
+defaultAddCapabilities: []
+fsGroup:
+  type: MustRunAs
+  ranges:
+    - min: 65534
+      max: 65534
+readOnlyRootFilesystem: true
+requiredDropCapabilities:
+  - ALL
+runAsUser:
+  type: MustRunAsNonRoot
+seLinuxContext:
+  type: MustRunAs
+volumes:
+  - configMap
+  - downwardAPI
+  - emptyDir
+  - persistentVolumeClaim
+  - projected
+  - secret
+
+---
+# Resource Quota for VoiceHive namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: voicehive-resource-quota
+  namespace: voicehive
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+
+    # Storage
+    requests.storage: 100Gi
+    persistentvolumeclaims: "10"
+
+    # Objects
+    pods: "20"
+    services: "10"
+    secrets: "20"
+    configmaps: "20"
+
+    # Security
+    count/podsecuritypolicies.policy: "1"
+
+---
+# Limit Range for containers
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: voicehive-limit-range
+  namespace: voicehive
+spec:
+  limits:
+    # Container limits
+    - type: Container
+      default:
+        cpu: 500m
+        memory: 1Gi
+        ephemeral-storage: 1Gi
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi
+        ephemeral-storage: 256Mi
+      max:
+        cpu: "2"
+        memory: 4Gi
+        ephemeral-storage: 4Gi
+      min:
+        cpu: 50m
+        memory: 128Mi
+        ephemeral-storage: 128Mi
+
+    # Pod limits
+    - type: Pod
+      max:
+        cpu: "4"
+        memory: 8Gi
+        ephemeral-storage: 8Gi
+
+    # PVC limits
+    - type: PersistentVolumeClaim
+      max:
+        storage: 50Gi
+      min:
+        storage: 1Gi
+
+---
+# Service Account for Orchestrator
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: voicehive-orchestrator
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: orchestrator
+    app.kubernetes.io/part-of: voicehive
+automountServiceAccountToken: false
+
+---
+# Service Account for Connectors
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: voicehive-connectors
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: connectors
+    app.kubernetes.io/part-of: voicehive
+automountServiceAccountToken: false
+
+---
+# Service Account for Media Services
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: voicehive-media
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: media
+    app.kubernetes.io/part-of: voicehive
+automountServiceAccountToken: false
+
+---
+# RBAC Role for VoiceHive services (minimal permissions)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: voicehive
+  name: voicehive-service-role
+rules:
+  # Allow reading own service account
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get"]
+    resourceNames:
+      ["voicehive-orchestrator", "voicehive-connectors", "voicehive-media"]
+  # Allow reading config maps and secrets (for configuration)
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list"]
+  # Allow reading endpoints for service discovery
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list"]
+
+---
+# RBAC RoleBinding for VoiceHive services
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: voicehive-service-binding
+  namespace: voicehive
+subjects:
+  - kind: ServiceAccount
+    name: voicehive-orchestrator
+    namespace: voicehive
+  - kind: ServiceAccount
+    name: voicehive-connectors
+    namespace: voicehive
+  - kind: ServiceAccount
+    name: voicehive-media
+    namespace: voicehive
+roleRef:
+  kind: Role
+  name: voicehive-service-role
+  apiGroup: rbac.authorization.k8s.io

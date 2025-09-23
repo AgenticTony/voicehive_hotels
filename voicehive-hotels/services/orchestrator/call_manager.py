@@ -348,12 +348,126 @@ class CallManager:
         
     async def _handle_dtmf(self, event: CallEvent) -> Dict[str, Any]:
         """Handle DTMF tones"""
-        # Implement DTMF handling for menu navigation
-        digit = event.data.get("digit")
-        logger.info("dtmf_received", digit=digit)
+        context = await self._get_call_by_room(event.room_name)
+        if not context:
+            return {"status": "error", "message": "call_not_found"}
         
-        # TODO: Implement DTMF menu logic
-        return {"status": "dtmf_received", "digit": digit}
+        digit = event.data.get("digit")
+        logger.info("dtmf_received", digit=digit, call_id=context.call_id)
+        
+        # Implement DTMF menu logic based on current context
+        response_text = ""
+        language = context.detected_language
+        
+        # Main menu navigation
+        if digit == "1":
+            response_text = self._get_localized_text("reservations_menu", language)
+            context.current_intent = "reservations"
+        elif digit == "2":
+            response_text = self._get_localized_text("hotel_info_menu", language)
+            context.current_intent = "hotel_info"
+        elif digit == "3":
+            response_text = self._get_localized_text("concierge_menu", language)
+            context.current_intent = "concierge"
+        elif digit == "4":
+            response_text = self._get_localized_text("spa_restaurant_menu", language)
+            context.current_intent = "amenities"
+        elif digit == "0":
+            response_text = self._get_localized_text("operator_transfer", language)
+            context.current_intent = "transfer_operator"
+        elif digit == "*":
+            response_text = self._get_localized_text("main_menu", language)
+            context.current_intent = "main_menu"
+        elif digit == "#":
+            response_text = self._get_localized_text("repeat_options", language)
+        else:
+            response_text = self._get_localized_text("invalid_option", language)
+        
+        # Add DTMF interaction to conversation history
+        context.conversation_history.append({
+            "role": "user",
+            "content": f"DTMF: {digit}",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": "dtmf"
+        })
+        
+        context.conversation_history.append({
+            "role": "assistant",
+            "content": response_text,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": "dtmf_response"
+        })
+        
+        # Save updated context
+        await self._save_context(context)
+        
+        # Synthesize response
+        tts_result = await self._synthesize_response(response_text, language)
+        
+        return {
+            "status": "dtmf_processed",
+            "digit": digit,
+            "intent": context.current_intent,
+            "action": "speak",
+            "text": response_text,
+            "language": language,
+            "audio_data": tts_result.audio_data if tts_result else None,
+            "audio_format": "mp3",
+            "metadata": {
+                "tts_engine": tts_result.engine_used if tts_result else None,
+                "tts_cached": tts_result.cached if tts_result else False,
+                "tts_duration_ms": tts_result.duration_ms if tts_result else None
+            }
+        }
+    
+    def _get_localized_text(self, key: str, language: str) -> str:
+        """Get localized text for DTMF responses"""
+        texts = {
+            "en": {
+                "reservations_menu": "You've selected reservations. Please tell me your confirmation number or say 'new reservation' to make a booking.",
+                "hotel_info_menu": "You've selected hotel information. I can help with amenities, hours, policies, or directions. What would you like to know?",
+                "concierge_menu": "You've selected concierge services. I can help with restaurant recommendations, local attractions, or transportation. How may I assist?",
+                "spa_restaurant_menu": "You've selected spa and dining. I can help with reservations, hours, or menu information. What interests you?",
+                "operator_transfer": "Please hold while I transfer you to our front desk operator.",
+                "main_menu": "Main menu: Press 1 for reservations, 2 for hotel information, 3 for concierge, 4 for spa and dining, or 0 for operator.",
+                "repeat_options": "Let me repeat the options: Press 1 for reservations, 2 for hotel information, 3 for concierge, 4 for spa and dining, or 0 for operator.",
+                "invalid_option": "I didn't recognize that option. Press * to hear the main menu or 0 to speak with an operator."
+            },
+            "de": {
+                "reservations_menu": "Sie haben Reservierungen gewählt. Bitte nennen Sie mir Ihre Bestätigungsnummer oder sagen Sie 'neue Reservierung'.",
+                "hotel_info_menu": "Sie haben Hotelinformationen gewählt. Ich kann bei Ausstattung, Öffnungszeiten, Richtlinien oder Wegbeschreibungen helfen.",
+                "concierge_menu": "Sie haben Concierge-Services gewählt. Ich kann bei Restaurantempfehlungen, lokalen Attraktionen oder Transport helfen.",
+                "spa_restaurant_menu": "Sie haben Spa und Restaurant gewählt. Ich kann bei Reservierungen, Öffnungszeiten oder Menüinformationen helfen.",
+                "operator_transfer": "Bitte warten Sie, während ich Sie zu unserem Empfang verbinde.",
+                "main_menu": "Hauptmenü: Drücken Sie 1 für Reservierungen, 2 für Hotelinformationen, 3 für Concierge, 4 für Spa und Restaurant, oder 0 für den Empfang.",
+                "repeat_options": "Ich wiederhole die Optionen: Drücken Sie 1 für Reservierungen, 2 für Hotelinformationen, 3 für Concierge, 4 für Spa und Restaurant, oder 0 für den Empfang.",
+                "invalid_option": "Diese Option habe ich nicht erkannt. Drücken Sie * für das Hauptmenü oder 0 um mit einem Mitarbeiter zu sprechen."
+            },
+            "es": {
+                "reservations_menu": "Ha seleccionado reservas. Por favor, dígame su número de confirmación o diga 'nueva reserva'.",
+                "hotel_info_menu": "Ha seleccionado información del hotel. Puedo ayudar con servicios, horarios, políticas o direcciones.",
+                "concierge_menu": "Ha seleccionado servicios de conserjería. Puedo ayudar con recomendaciones de restaurantes, atracciones locales o transporte.",
+                "spa_restaurant_menu": "Ha seleccionado spa y restaurante. Puedo ayudar con reservas, horarios o información del menú.",
+                "operator_transfer": "Por favor espere mientras le transfiero con nuestro operador de recepción.",
+                "main_menu": "Menú principal: Presione 1 para reservas, 2 para información del hotel, 3 para conserjería, 4 para spa y restaurante, o 0 para operador.",
+                "repeat_options": "Repito las opciones: Presione 1 para reservas, 2 para información del hotel, 3 para conserjería, 4 para spa y restaurante, o 0 para operador.",
+                "invalid_option": "No reconocí esa opción. Presione * para el menú principal o 0 para hablar con un operador."
+            },
+            "fr": {
+                "reservations_menu": "Vous avez sélectionné les réservations. Veuillez me donner votre numéro de confirmation ou dire 'nouvelle réservation'.",
+                "hotel_info_menu": "Vous avez sélectionné les informations de l'hôtel. Je peux aider avec les équipements, horaires, politiques ou directions.",
+                "concierge_menu": "Vous avez sélectionné les services de conciergerie. Je peux aider avec les recommandations de restaurants, attractions locales ou transport.",
+                "spa_restaurant_menu": "Vous avez sélectionné spa et restaurant. Je peux aider avec les réservations, horaires ou informations du menu.",
+                "operator_transfer": "Veuillez patienter pendant que je vous transfère vers notre opérateur de réception.",
+                "main_menu": "Menu principal: Appuyez sur 1 pour les réservations, 2 pour les informations de l'hôtel, 3 pour la conciergerie, 4 pour le spa et restaurant, ou 0 pour l'opérateur.",
+                "repeat_options": "Je répète les options: Appuyez sur 1 pour les réservations, 2 pour les informations de l'hôtel, 3 pour la conciergerie, 4 pour le spa et restaurant, ou 0 pour l'opérateur.",
+                "invalid_option": "Je n'ai pas reconnu cette option. Appuyez sur * pour le menu principal ou 0 pour parler à un opérateur."
+            }
+        }
+        
+        # Get language-specific texts, fallback to English
+        lang_texts = texts.get(language, texts.get("en", texts["en"]))
+        return lang_texts.get(key, texts["en"].get(key, ""))
         
     async def _get_call_by_room(self, room_name: str) -> Optional[CallContext]:
         """Retrieve call context by room name"""

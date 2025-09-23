@@ -114,6 +114,13 @@ class ASRService:
     
     def __init__(self):
         """Initialize connection to Riva server"""
+        self.auth = None
+        self.asr_service = None
+        self.connection_healthy = False
+        self._connect_to_riva()
+    
+    def _connect_to_riva(self):
+        """Establish connection to Riva server with error handling"""
         try:
             import riva.client
             
@@ -123,16 +130,50 @@ class ASRService:
             # Initialize ASR service
             self.asr_service = riva.client.ASRService(self.auth)
             
-            logger.info("Connected to Riva server", server=RIVA_SERVER, port=RIVA_PORT)
+            # Test the connection
+            metadata = self.asr_service.get_service_metadata()
+            self.connection_healthy = True
+            
+            logger.info("Connected to Riva server", 
+                       server=RIVA_SERVER, 
+                       port=RIVA_PORT,
+                       service_version=getattr(metadata, 'version', 'unknown') if metadata else 'unknown')
         except Exception as e:
+            self.connection_healthy = False
             logger.error("Failed to connect to Riva", error=str(e))
-            raise
+            # Don't raise here - let individual methods handle the error
+    
+    def _ensure_connection(self):
+        """Ensure connection is healthy, reconnect if needed"""
+        if not self.connection_healthy or not self.asr_service:
+            logger.info("Attempting to reconnect to Riva server")
+            self._connect_to_riva()
+        
+        if not self.connection_healthy:
+            raise HTTPException(
+                status_code=503, 
+                detail="Riva ASR service is not available. Please try again later."
+            )
+    
+    def close_connection(self):
+        """Properly close Riva gRPC connection"""
+        try:
+            if self.asr_service and hasattr(self.asr_service, '_channel'):
+                # Close the gRPC channel properly
+                self.asr_service._channel.close()
+                logger.info("Riva gRPC channel closed successfully")
+            self.connection_healthy = False
+        except Exception as e:
+            logger.error(f"Error closing Riva connection: {e}")
             
     async def transcribe_offline(self, request: TranscribeRequest) -> TranscriptionResult:
         """Perform offline transcription"""
         start_time = datetime.now(timezone.utc)
         
         try:
+            # Ensure connection is healthy
+            self._ensure_connection()
+            
             # Decode audio data
             import base64
             import riva.client
@@ -148,8 +189,15 @@ class ASRService:
                 verbatim_transcripts=False,
             )
             
-            # Call Riva ASR service
-            response = self.asr_service.offline_recognize(audio_bytes, config)
+            # Call Riva ASR service with retry logic
+            try:
+                response = self.asr_service.offline_recognize(audio_bytes, config)
+            except Exception as riva_error:
+                # Mark connection as unhealthy and retry once
+                logger.warning("Riva call failed, attempting reconnection", error=str(riva_error))
+                self.connection_healthy = False
+                self._ensure_connection()
+                response = self.asr_service.offline_recognize(audio_bytes, config)
             
             # Extract results
             transcript = ""
@@ -192,8 +240,12 @@ class ASRService:
     async def detect_language(self, request: LanguageDetectionRequest) -> LanguageDetectionResult:
         """Detect language from audio using transcription + text language detection"""
         try:
+            # Ensure connection is healthy
+            self._ensure_connection()
+            
             import base64
             import pycld3
+            import riva.client
             
             # First, transcribe a short segment with English model
             audio_bytes = base64.b64decode(request.audio_data)
@@ -208,8 +260,15 @@ class ASRService:
                 verbatim_transcripts=True,
             )
             
-            # Get transcription
-            response = self.asr_service.offline_recognize(audio_bytes[:16000*5], config)  # First 5 seconds
+            # Get transcription with error handling
+            try:
+                response = self.asr_service.offline_recognize(audio_bytes[:16000*5], config)  # First 5 seconds
+            except Exception as riva_error:
+                # Mark connection as unhealthy and retry once
+                logger.warning("Riva language detection failed, attempting reconnection", error=str(riva_error))
+                self.connection_healthy = False
+                self._ensure_connection()
+                response = self.asr_service.offline_recognize(audio_bytes[:16000*5], config)
             
             if not response.results or not response.results[0].alternatives:
                 # Fallback if no transcription
@@ -269,13 +328,36 @@ asr_service = ASRService()
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    # TODO: Check Riva connection status
-    return {
-        "status": "healthy",
-        "service": "riva-asr-proxy",
-        "version": "1.0.0",
-        "riva_connected": True  # Mock for now
-    }
+    try:
+        # Check Riva connection status by attempting a simple health check
+        import riva.client
+        
+        # Create a temporary auth connection to test
+        test_auth = riva.client.Auth(uri=f"{RIVA_SERVER}:{RIVA_PORT}")
+        test_service = riva.client.ASRService(test_auth)
+        
+        # Try to get service metadata to verify connection
+        # This is a lightweight operation that confirms connectivity
+        service_metadata = test_service.get_service_metadata()
+        
+        return {
+            "status": "healthy",
+            "service": "riva-asr-proxy",
+            "version": "1.0.0",
+            "riva_connected": True,
+            "riva_server": f"{RIVA_SERVER}:{RIVA_PORT}",
+            "riva_service_version": getattr(service_metadata, 'version', 'unknown') if service_metadata else 'unknown'
+        }
+    except Exception as e:
+        logger.error("Riva health check failed", error=str(e))
+        return {
+            "status": "unhealthy",
+            "service": "riva-asr-proxy",
+            "version": "1.0.0",
+            "riva_connected": False,
+            "riva_server": f"{RIVA_SERVER}:{RIVA_PORT}",
+            "error": str(e)
+        }
 
 
 @app.get("/metrics")
@@ -435,14 +517,45 @@ async def startup_event():
     logger.info("Starting Riva ASR Proxy", 
                 riva_server=RIVA_SERVER, 
                 riva_port=RIVA_PORT)
-    # TODO: Verify Riva connection
+    
+    # Verify Riva connection on startup
+    try:
+        # Test connection by creating a temporary service instance
+        import riva.client
+        test_auth = riva.client.Auth(uri=f"{RIVA_SERVER}:{RIVA_PORT}")
+        test_service = riva.client.ASRService(test_auth)
+        
+        # Try to get service metadata to verify connection
+        metadata = test_service.get_service_metadata()
+        logger.info("Riva connection verified successfully", 
+                   server=f"{RIVA_SERVER}:{RIVA_PORT}",
+                   service_version=getattr(metadata, 'version', 'unknown') if metadata else 'unknown')
+        
+        # Initialize the global ASR service
+        global asr_service
+        asr_service = ASRService()
+        
+    except Exception as e:
+        logger.error("Failed to connect to Riva server on startup", 
+                    error=str(e), 
+                    server=f"{RIVA_SERVER}:{RIVA_PORT}")
+        # Don't fail startup, but log the error
+        # The service will return appropriate errors when called
     
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
     logger.info("Shutting down Riva ASR Proxy")
-    # TODO: Close Riva connection
+    
+    # Close Riva connection if it exists
+    global asr_service
+    if asr_service:
+        try:
+            asr_service.close_connection()
+            logger.info("Riva connection closed successfully")
+        except Exception as e:
+            logger.error("Error closing Riva connection", error=str(e))
     
 
 if __name__ == "__main__":

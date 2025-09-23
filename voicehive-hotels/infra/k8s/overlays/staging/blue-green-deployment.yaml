@@ -1,0 +1,143 @@
+# Blue-Green Deployment Strategy for Staging
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: voicehive-orchestrator-rollout
+  namespace: voicehive-staging
+spec:
+  replicas: 3
+  strategy:
+    blueGreen:
+      # Traffic routing
+      activeService: voicehive-orchestrator-active
+      previewService: voicehive-orchestrator-preview
+      
+      # Validation and promotion
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 30
+      prePromotionAnalysis:
+        templates:
+        - templateName: success-rate
+        args:
+        - name: service-name
+          value: voicehive-orchestrator-preview
+      
+      # Rollback configuration
+      abortScaleDownDelaySeconds: 30
+      
+      # Smoke tests before promotion
+      prePromotionAnalysis:
+        templates:
+        - templateName: smoke-tests
+        args:
+        - name: service-name
+          value: voicehive-orchestrator-preview
+  
+  selector:
+    matchLabels:
+      app: voicehive-orchestrator
+  
+  template:
+    metadata:
+      labels:
+        app: voicehive-orchestrator
+        version: "{{.Values.image.tag}}"
+    spec:
+      containers:
+      - name: orchestrator
+        image: "{{.Values.image.repository}}:{{.Values.image.tag}}"
+        ports:
+        - containerPort: 8000
+          name: http
+        - containerPort: 8080
+          name: metrics
+        
+        # Enhanced health checks for blue-green deployment
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        
+        startupProbe:
+          httpGet:
+            path: /health/startup
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+        
+        # Resource limits for staging
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+        # Environment-specific configuration
+        env:
+        - name: ENVIRONMENT
+          value: "staging"
+        - name: LOG_LEVEL
+          value: "DEBUG"
+        - name: MONITORING_ENABLED
+          value: "true"
+        - name: SECURITY_ENHANCED
+          value: "true"
+        
+        envFrom:
+        - configMapRef:
+            name: staging-deployment-config
+        - secretRef:
+            name: staging-deployment-secrets
+---
+# Active Service (Blue)
+apiVersion: v1
+kind: Service
+metadata:
+  name: voicehive-orchestrator-active
+  namespace: voicehive-staging
+spec:
+  selector:
+    app: voicehive-orchestrator
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8000
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP
+---
+# Preview Service (Green)
+apiVersion: v1
+kind: Service
+metadata:
+  name: voicehive-orchestrator-preview
+  namespace: voicehive-staging
+spec:
+  selector:
+    app: voicehive-orchestrator
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8000
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP

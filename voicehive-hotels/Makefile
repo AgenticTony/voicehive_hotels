@@ -207,6 +207,89 @@ security-scan:
 	# Scan for secrets
 	trufflehog filesystem . --exclude-paths .trufflehog-ignore
 
+# Dependency Security Management
+security-scan-deps:
+	@echo "Running comprehensive dependency security scan..."
+	python scripts/security/dependency-security-manager.py scan --service all --format json --output security-scan-results.json
+	@echo "✅ Dependency security scan completed. Results saved to security-scan-results.json"
+
+security-scan-service:
+	@if [ -z "$(SERVICE)" ]; then \
+		echo "Usage: make security-scan-service SERVICE=<service_name>"; \
+		exit 1; \
+	fi
+	python scripts/security/dependency-security-manager.py scan --service $(SERVICE) --format markdown
+
+security-update:
+	@echo "Updating dependencies with security patches..."
+	python scripts/security/dependency-security-manager.py update --service all --security-only
+	@echo "✅ Security updates applied"
+
+security-update-service:
+	@if [ -z "$(SERVICE)" ]; then \
+		echo "Usage: make security-update-service SERVICE=<service_name>"; \
+		exit 1; \
+	fi
+	python scripts/security/dependency-security-manager.py update --service $(SERVICE) --security-only
+
+security-pin-deps:
+	@echo "Pinning dependencies with hash verification..."
+	python scripts/security/dependency-security-manager.py pin --service all --with-hashes
+	@echo "✅ Dependencies pinned with hashes"
+
+security-audit:
+	@echo "Running security audit (fails on critical vulnerabilities)..."
+	python scripts/security/dependency-security-manager.py audit --service all
+
+license-check:
+	@echo "Checking license compliance..."
+	# Generate license reports for each service
+	for service in orchestrator connectors riva-proxy tts-router media-agent; do \
+		if [ -f "services/$$service/requirements.txt" ] || [ "$$service" = "connectors" ]; then \
+			echo "Checking licenses for $$service..."; \
+			REQ_FILE="services/$$service/requirements.txt"; \
+			if [ "$$service" = "connectors" ]; then \
+				REQ_FILE="connectors/requirements-test.txt"; \
+			fi; \
+			if [ -f "$$REQ_FILE" ]; then \
+				python -m venv temp_env_$$service; \
+				source temp_env_$$service/bin/activate; \
+				pip install -r "$$REQ_FILE" > /dev/null 2>&1; \
+				pip-licenses --format json --output-file license-report-$$service.json; \
+				deactivate; \
+				rm -rf temp_env_$$service; \
+			fi; \
+		fi; \
+	done
+	# Check compliance
+	python scripts/security/check-license-compliance.py \
+		--config config/security/dependency-security-config.yaml \
+		--reports license-report-*.json \
+		--output license-compliance-report.json \
+		--format markdown
+	@echo "✅ License compliance check completed"
+
+security-dashboard:
+	@echo "Generating security dashboard..."
+	python scripts/security/generate-security-dashboard.py \
+		--vulnerability-reports "security-scan-results.json" \
+		--license-reports "license-compliance-report.json" \
+		--output security-dashboard.html \
+		--format html
+	@echo "✅ Security dashboard generated: security-dashboard.html"
+
+security-setup:
+	@echo "Setting up security tools..."
+	pip install -r scripts/security/requirements-security-tools.txt
+	@echo "✅ Security tools installed"
+
+security-full:
+	@echo "Running full security analysis..."
+	$(MAKE) security-scan-deps
+	$(MAKE) license-check
+	$(MAKE) security-dashboard
+	@echo "✅ Full security analysis completed. Check security-dashboard.html"
+
 update-deps:
 	# Update Python dependencies
 	pip-compile requirements.in -U

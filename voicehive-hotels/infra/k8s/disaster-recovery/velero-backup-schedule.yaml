@@ -1,0 +1,327 @@
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: voicehive-daily-backup
+  namespace: velero
+  labels:
+    app: velero
+    component: backup-schedule
+spec:
+  # Daily backup at 2 AM UTC
+  schedule: "0 2 * * *"
+  template:
+    # Include VoiceHive namespaces
+    includedNamespaces:
+      - voicehive-production
+      - voicehive-staging
+      - monitoring
+      - ingress-nginx
+
+    # Exclude temporary resources
+    excludedResources:
+      - events
+      - events.events.k8s.io
+      - nodes
+      - nodes.metrics.k8s.io
+      - pods.metrics.k8s.io
+
+    # Include cluster-scoped resources
+    includeClusterResources: true
+
+    # Storage location for backups
+    storageLocation: default
+
+    # Volume snapshot locations
+    volumeSnapshotLocations:
+      - default
+
+    # Backup retention (30 days)
+    ttl: 720h0m0s
+
+    # Backup hooks for application consistency
+    hooks:
+      resources:
+        - name: postgres-backup-hook
+          includedNamespaces:
+            - voicehive-production
+          includedResources:
+            - pods
+          labelSelector:
+            matchLabels:
+              app: postgres
+          pre:
+            - exec:
+                container: postgres
+                command:
+                  - /bin/bash
+                  - -c
+                  - "pg_start_backup('velero-backup-$(date +%Y%m%d-%H%M%S)', true)"
+                onError: Continue
+          post:
+            - exec:
+                container: postgres
+                command:
+                  - /bin/bash
+                  - -c
+                  - "pg_stop_backup()"
+                onError: Continue
+
+        - name: redis-backup-hook
+          includedNamespaces:
+            - voicehive-production
+          includedResources:
+            - pods
+          labelSelector:
+            matchLabels:
+              app: redis
+          pre:
+            - exec:
+                container: redis
+                command:
+                  - redis-cli
+                  - BGSAVE
+                onError: Continue
+
+---
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: voicehive-weekly-full-backup
+  namespace: velero
+  labels:
+    app: velero
+    component: backup-schedule
+    backup-type: full
+spec:
+  # Weekly full backup on Sunday at 1 AM UTC
+  schedule: "0 1 * * 0"
+  template:
+    # Include all namespaces
+    includedNamespaces:
+      - "*"
+
+    # Include all cluster resources
+    includeClusterResources: true
+
+    # Storage location
+    storageLocation: default
+
+    # Volume snapshots
+    volumeSnapshotLocations:
+      - default
+
+    # Extended retention for weekly backups (90 days)
+    ttl: 2160h0m0s
+
+    # Metadata labels
+    metadata:
+      labels:
+        backup-type: weekly-full
+        retention-policy: extended
+
+---
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: voicehive-cross-region-backup
+  namespace: velero
+  labels:
+    app: velero
+    component: backup-schedule
+    backup-type: cross-region
+spec:
+  # Cross-region backup twice daily
+  schedule: "0 6,18 * * *"
+  template:
+    includedNamespaces:
+      - voicehive-production
+
+    includeClusterResources: false
+
+    # Use cross-region storage location
+    storageLocation: cross-region
+
+    # Cross-region volume snapshots
+    volumeSnapshotLocations:
+      - cross-region
+
+    # Retention for cross-region backups (60 days)
+    ttl: 1440h0m0s
+
+    metadata:
+      labels:
+        backup-type: cross-region
+        disaster-recovery: enabled
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: velero-backup-verification
+  namespace: velero
+data:
+  verify-backup.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    BACKUP_NAME="$1"
+    NAMESPACE="${2:-voicehive-production}"
+
+    echo "Verifying backup: $BACKUP_NAME"
+
+    # Check backup status
+    BACKUP_STATUS=$(kubectl get backup $BACKUP_NAME -n velero -o jsonpath='{.status.phase}')
+
+    if [ "$BACKUP_STATUS" != "Completed" ]; then
+        echo "ERROR: Backup $BACKUP_NAME is not completed. Status: $BACKUP_STATUS"
+        exit 1
+    fi
+
+    # Check backup size
+    BACKUP_SIZE=$(kubectl get backup $BACKUP_NAME -n velero -o jsonpath='{.status.progress.totalItems}')
+    echo "Backup contains $BACKUP_SIZE items"
+
+    if [ "$BACKUP_SIZE" -lt 10 ]; then
+        echo "WARNING: Backup seems too small ($BACKUP_SIZE items)"
+    fi
+
+    # Verify backup can be restored (dry-run)
+    kubectl create -f - <<EOF
+    apiVersion: velero.io/v1
+    kind: Restore
+    metadata:
+      name: ${BACKUP_NAME}-verify
+      namespace: velero
+    spec:
+      backupName: $BACKUP_NAME
+      includedNamespaces:
+        - $NAMESPACE
+      restorePVs: false
+      existingResourcePolicy: skip
+    EOF
+
+    # Wait for restore validation
+    sleep 30
+
+    # Check restore status
+    RESTORE_STATUS=$(kubectl get restore ${BACKUP_NAME}-verify -n velero -o jsonpath='{.status.phase}')
+
+    if [ "$RESTORE_STATUS" = "Completed" ]; then
+        echo "SUCCESS: Backup verification completed"
+        # Cleanup verification restore
+        kubectl delete restore ${BACKUP_NAME}-verify -n velero
+    else
+        echo "ERROR: Backup verification failed. Restore status: $RESTORE_STATUS"
+        exit 1
+    fi
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-verification
+  namespace: velero
+spec:
+  schedule: "0 4 * * *" # Daily at 4 AM UTC
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: velero
+          containers:
+            - name: backup-verifier
+              image: bitnami/kubectl:latest
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  # Get latest backup
+                  LATEST_BACKUP=$(kubectl get backups -n velero --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}')
+
+                  if [ -z "$LATEST_BACKUP" ]; then
+                    echo "No backups found"
+                    exit 1
+                  fi
+
+                  echo "Verifying latest backup: $LATEST_BACKUP"
+
+                  # Source verification script
+                  source /scripts/verify-backup.sh
+
+                  # Run verification
+                  verify-backup.sh "$LATEST_BACKUP" "voicehive-production"
+              volumeMounts:
+                - name: verification-scripts
+                  mountPath: /scripts
+          volumes:
+            - name: verification-scripts
+              configMap:
+                name: velero-backup-verification
+                defaultMode: 0755
+          restartPolicy: OnFailure
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloud-credentials
+  namespace: velero
+type: Opaque
+data:
+  # AWS credentials for cross-region backup
+  # These should be base64 encoded
+  cloud: |
+    W2RlZmF1bHRdCmF3c19hY2Nlc3Nfa2V5X2lkID0gWU9VUl9BQ0NFU1NfS0VZX0lECmF3c19zZWNy
+    ZXRfYWNjZXNzX2tleSA9IFlPVVJfU0VDUkVUX0FDQ0VTU19LRVk=
+
+---
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: default
+  namespace: velero
+spec:
+  provider: aws
+  objectStorage:
+    bucket: voicehive-velero-backups-primary
+    prefix: production
+  config:
+    region: eu-west-1
+    s3ForcePathStyle: "false"
+
+---
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: cross-region
+  namespace: velero
+spec:
+  provider: aws
+  objectStorage:
+    bucket: voicehive-velero-backups-dr
+    prefix: production
+  config:
+    region: eu-central-1
+    s3ForcePathStyle: "false"
+
+---
+apiVersion: velero.io/v1
+kind: VolumeSnapshotLocation
+metadata:
+  name: default
+  namespace: velero
+spec:
+  provider: aws
+  config:
+    region: eu-west-1
+
+---
+apiVersion: velero.io/v1
+kind: VolumeSnapshotLocation
+metadata:
+  name: cross-region
+  namespace: velero
+spec:
+  provider: aws
+  config:
+    region: eu-central-1

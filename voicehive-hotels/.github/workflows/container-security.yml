@@ -1,0 +1,523 @@
+name: Container Security & Supply Chain
+
+on:
+  schedule:
+    # Run daily security scans at 2 AM UTC
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: "Type of security scan"
+        required: true
+        type: choice
+        options:
+          - vulnerability
+          - compliance
+          - runtime
+          - full
+      severity:
+        description: "Minimum severity level"
+        required: false
+        default: "HIGH"
+        type: choice
+        options:
+          - LOW
+          - MEDIUM
+          - HIGH
+          - CRITICAL
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: read
+  security-events: write
+  issues: write
+
+jobs:
+  # Daily vulnerability scanning of production images
+  vulnerability-scan:
+    name: Daily Vulnerability Scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event.inputs.scan_type == 'vulnerability' || github.event.inputs.scan_type == 'full'
+    strategy:
+      matrix:
+        service: [orchestrator, connectors, riva-proxy, tts-router, media-agent]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest image tag
+        id: latest-tag
+        run: |
+          LATEST_TAG=$(docker image ls --format "table {{.Repository}}:{{.Tag}}" | grep "${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}" | head -1 | cut -d: -f2)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="latest"
+          fi
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      - name: Pull latest image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ steps.latest-tag.outputs.tag }}
+
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ steps.latest-tag.outputs.tag }}
+          format: "sarif"
+          output: "trivy-daily-${{ matrix.service }}.sarif"
+          severity: ${{ github.event.inputs.severity || 'HIGH' }}
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: "trivy-daily-${{ matrix.service }}.sarif"
+          category: "daily-scan-${{ matrix.service }}"
+
+      - name: Run Grype scan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          grype ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ steps.latest-tag.outputs.tag }} \
+            -o json --file grype-daily-${{ matrix.service }}.json
+
+      - name: Check for critical vulnerabilities
+        run: |
+          CRITICAL_COUNT=$(jq '.matches[] | select(.vulnerability.severity == "Critical") | length' grype-daily-${{ matrix.service }}.json | wc -l)
+          HIGH_COUNT=$(jq '.matches[] | select(.vulnerability.severity == "High") | length' grype-daily-${{ matrix.service }}.json | wc -l)
+
+          echo "Critical vulnerabilities: $CRITICAL_COUNT"
+          echo "High vulnerabilities: $HIGH_COUNT"
+
+          if [ "$CRITICAL_COUNT" -gt 0 ]; then
+            echo "::error::Critical vulnerabilities found in ${{ matrix.service }}"
+            exit 1
+          fi
+
+      - name: Create vulnerability report
+        if: failure()
+        run: |
+          echo "# Vulnerability Report - ${{ matrix.service }}" > vuln-report-${{ matrix.service }}.md
+          echo "Date: $(date)" >> vuln-report-${{ matrix.service }}.md
+          echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ steps.latest-tag.outputs.tag }}" >> vuln-report-${{ matrix.service }}.md
+          echo "" >> vuln-report-${{ matrix.service }}.md
+          echo "## Critical Vulnerabilities" >> vuln-report-${{ matrix.service }}.md
+          jq -r '.matches[] | select(.vulnerability.severity == "Critical") | "- **\(.vulnerability.id)**: \(.vulnerability.description // "No description")"' grype-daily-${{ matrix.service }}.json >> vuln-report-${{ matrix.service }}.md
+
+      - name: Create security issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const reportPath = `vuln-report-${{ matrix.service }}.md`;
+            let body = 'Automated security scan found critical vulnerabilities.';
+
+            if (fs.existsSync(reportPath)) {
+              body = fs.readFileSync(reportPath, 'utf8');
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚨 Critical vulnerabilities in ${{ matrix.service }} container`,
+              body: body,
+              labels: ['security', 'vulnerability', 'critical', '${{ matrix.service }}']
+            });
+
+  # Container compliance scanning
+  compliance-scan:
+    name: Container Compliance Scan
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'compliance' || github.event.inputs.scan_type == 'full'
+    strategy:
+      matrix:
+        service: [orchestrator, connectors, riva-proxy, tts-router, media-agent]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull latest image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest
+
+      - name: Run Docker Bench Security
+        run: |
+          git clone https://github.com/docker/docker-bench-security.git
+          cd docker-bench-security
+          sudo ./docker-bench-security.sh -c container_images
+
+      - name: Run CIS Docker Benchmark with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest
+          format: "json"
+          output: "cis-${{ matrix.service }}.json"
+          scan-type: "config"
+
+      - name: Check distroless compliance
+        run: |
+          # Verify image is using distroless base
+          DISTROLESS_CHECK=$(docker image inspect ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest | jq -r '.[0].Config.Labels."security.distroless"')
+          if [ "$DISTROLESS_CHECK" != "true" ]; then
+            echo "::error::Image ${{ matrix.service }} is not using distroless base image"
+            exit 1
+          fi
+          echo "✅ Image ${{ matrix.service }} is using distroless base"
+
+      - name: Verify SBOM presence
+        run: |
+          SBOM_LABEL=$(docker image inspect ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest | jq -r '.[0].Config.Labels."security.sbom"')
+          if [ "$SBOM_LABEL" = "null" ] || [ -z "$SBOM_LABEL" ]; then
+            echo "::error::SBOM not found in image ${{ matrix.service }}"
+            exit 1
+          fi
+          echo "✅ SBOM found in image ${{ matrix.service }}"
+
+      - name: Verify image signature
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          cosign verify ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest \
+            --certificate-identity-regexp="https://github.com/${{ github.repository }}" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" || {
+            echo "::error::Image signature verification failed for ${{ matrix.service }}"
+            exit 1
+          }
+          echo "✅ Image signature verified for ${{ matrix.service }}"
+
+  # Runtime security monitoring setup
+  runtime-security:
+    name: Runtime Security Monitoring
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'runtime' || github.event.inputs.scan_type == 'full'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Falco rules validator
+        run: |
+          curl -s https://falco.org/repo/falcosecurity-packages.asc | sudo apt-key add -
+          echo "deb https://download.falco.org/packages/deb stable main" | sudo tee -a /etc/apt/sources.list.d/falcosecurity.list
+          sudo apt-get update -qq
+          sudo apt-get install -y falco
+
+      - name: Validate Falco rules
+        run: |
+          # Create custom Falco rules for VoiceHive containers
+          cat > voicehive-falco-rules.yaml << 'EOF'
+          - rule: VoiceHive Container Privilege Escalation
+            desc: Detect privilege escalation in VoiceHive containers
+            condition: >
+              spawned_process and container and
+              (container.image.repository contains "voicehive" or container.image.repository contains "ghcr.io/voicehive") and
+              (proc.name in (su, sudo, setuid_binaries) or
+               (proc.args contains "--privileged" or proc.args contains "--cap-add"))
+            output: >
+              Privilege escalation detected in VoiceHive container
+              (user=%user.name command=%proc.cmdline container=%container.name image=%container.image.repository)
+            priority: CRITICAL
+            tags: [container, privilege_escalation, voicehive]
+
+          - rule: VoiceHive Suspicious Network Activity
+            desc: Detect suspicious network connections from VoiceHive containers
+            condition: >
+              inbound_outbound and container and
+              (container.image.repository contains "voicehive" or container.image.repository contains "ghcr.io/voicehive") and
+              (fd.net and not fd.sport in (8080, 8081, 9000, 8001)) and
+              not proc.name in (uvicorn, python, python3)
+            output: >
+              Suspicious network activity in VoiceHive container
+              (connection=%fd.name container=%container.name image=%container.image.repository)
+            priority: WARNING
+            tags: [network, container, voicehive]
+
+          - rule: VoiceHive File System Modification
+            desc: Detect unauthorized file system modifications in VoiceHive containers
+            condition: >
+              open_write and container and
+              (container.image.repository contains "voicehive" or container.image.repository contains "ghcr.io/voicehive") and
+              fd.name startswith /app and
+              not proc.name in (python, python3, uvicorn) and
+              not fd.name contains ".pyc"
+            output: >
+              Unauthorized file modification in VoiceHive container
+              (file=%fd.name container=%container.name image=%container.image.repository process=%proc.name)
+            priority: HIGH
+            tags: [filesystem, container, voicehive]
+          EOF
+
+          # Validate the rules
+          falco --validate voicehive-falco-rules.yaml
+
+      - name: Generate runtime security configuration
+        run: |
+          # Create Kubernetes security policies
+          mkdir -p runtime-security
+
+          # Pod Security Policy
+          cat > runtime-security/pod-security-policy.yaml << 'EOF'
+          apiVersion: policy/v1beta1
+          kind: PodSecurityPolicy
+          metadata:
+            name: voicehive-restricted
+            namespace: voicehive
+          spec:
+            privileged: false
+            allowPrivilegeEscalation: false
+            requiredDropCapabilities:
+              - ALL
+            volumes:
+              - 'configMap'
+              - 'emptyDir'
+              - 'projected'
+              - 'secret'
+              - 'downwardAPI'
+              - 'persistentVolumeClaim'
+            runAsUser:
+              rule: 'MustRunAsNonRoot'
+            seLinux:
+              rule: 'RunAsAny'
+            fsGroup:
+              rule: 'RunAsAny'
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          EOF
+
+          # Network Policy
+          cat > runtime-security/network-policy.yaml << 'EOF'
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: voicehive-network-policy
+            namespace: voicehive
+          spec:
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/part-of: voicehive
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - from:
+              - namespaceSelector:
+                  matchLabels:
+                    name: voicehive
+              - namespaceSelector:
+                  matchLabels:
+                    name: ingress-nginx
+            egress:
+            - to:
+              - namespaceSelector:
+                  matchLabels:
+                    name: voicehive
+            - to: []
+              ports:
+              - protocol: TCP
+                port: 443  # HTTPS
+              - protocol: TCP
+                port: 53   # DNS
+              - protocol: UDP
+                port: 53   # DNS
+          EOF
+
+          # Security Context Constraints
+          cat > runtime-security/security-context.yaml << 'EOF'
+          apiVersion: v1
+          kind: SecurityContext
+          metadata:
+            name: voicehive-security-context
+          spec:
+            runAsNonRoot: true
+            runAsUser: 65534  # nonroot user
+            runAsGroup: 65534
+            fsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop:
+              - ALL
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          EOF
+
+      - name: Upload runtime security artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: runtime-security-config
+          path: |
+            voicehive-falco-rules.yaml
+            runtime-security/
+
+  # Supply chain security audit
+  supply-chain-audit:
+    name: Supply Chain Security Audit
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'full' || github.event_name == 'schedule'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Audit base images
+        run: |
+          echo "# Supply Chain Security Audit" > supply-chain-report.md
+          echo "Date: $(date)" >> supply-chain-report.md
+          echo "" >> supply-chain-report.md
+
+          # Check distroless image versions
+          echo "## Base Image Audit" >> supply-chain-report.md
+          echo "### Distroless Images" >> supply-chain-report.md
+
+          # Get latest distroless image digest
+          DISTROLESS_DIGEST=$(docker manifest inspect gcr.io/distroless/python3-debian12:nonroot | jq -r '.manifests[0].digest')
+          echo "- **gcr.io/distroless/python3-debian12:nonroot**: $DISTROLESS_DIGEST" >> supply-chain-report.md
+
+          # Scan distroless base image
+          docker pull gcr.io/distroless/python3-debian12:nonroot
+          trivy image --format json --output distroless-scan.json gcr.io/distroless/python3-debian12:nonroot
+
+          CRITICAL_VULNS=$(jq '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL") | length' distroless-scan.json | wc -l)
+          echo "- **Critical vulnerabilities in base image**: $CRITICAL_VULNS" >> supply-chain-report.md
+
+      - name: Audit Python dependencies
+        run: |
+          echo "" >> supply-chain-report.md
+          echo "## Dependency Audit" >> supply-chain-report.md
+
+          # Install safety for Python dependency scanning
+          pip install safety
+
+          # Scan each service's requirements
+          for service in orchestrator connectors riva-proxy tts-router media-agent; do
+            if [ -f "services/$service/requirements.txt" ] || [ -f "connectors/requirements.txt" ]; then
+              echo "### $service Dependencies" >> supply-chain-report.md
+              
+              REQ_FILE="services/$service/requirements.txt"
+              if [ "$service" = "connectors" ]; then
+                REQ_FILE="connectors/requirements.txt"
+              fi
+              
+              if [ -f "$REQ_FILE" ]; then
+                safety check -r "$REQ_FILE" --json > safety-$service.json || true
+                VULN_COUNT=$(jq '.vulnerabilities | length' safety-$service.json)
+                echo "- **Vulnerabilities found**: $VULN_COUNT" >> supply-chain-report.md
+              fi
+            fi
+          done
+
+      - name: Check for outdated dependencies
+        run: |
+          echo "" >> supply-chain-report.md
+          echo "## Outdated Dependencies" >> supply-chain-report.md
+
+          pip install pip-audit
+
+          for service in orchestrator connectors riva-proxy tts-router media-agent; do
+            REQ_FILE="services/$service/requirements.txt"
+            if [ "$service" = "connectors" ]; then
+              REQ_FILE="connectors/requirements.txt"
+            fi
+            
+            if [ -f "$REQ_FILE" ]; then
+              echo "### $service" >> supply-chain-report.md
+              pip-audit -r "$REQ_FILE" --format json --output audit-$service.json || true
+              
+              if [ -f "audit-$service.json" ]; then
+                OUTDATED_COUNT=$(jq '.vulnerabilities | length' audit-$service.json)
+                echo "- **Outdated packages with vulnerabilities**: $OUTDATED_COUNT" >> supply-chain-report.md
+              fi
+            fi
+          done
+
+      - name: Generate SLSA provenance verification
+        run: |
+          echo "" >> supply-chain-report.md
+          echo "## SLSA Provenance Verification" >> supply-chain-report.md
+
+          # Check if images have SLSA provenance
+          for service in orchestrator connectors riva-proxy tts-router media-agent; do
+            echo "### $service" >> supply-chain-report.md
+            
+            # Try to verify provenance (this would work if we had SLSA setup)
+            echo "- **SLSA Provenance**: Checking..." >> supply-chain-report.md
+            
+            # For now, just check if the image has build metadata
+            docker image inspect ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/$service:latest > /dev/null 2>&1 && {
+              BUILD_DATE=$(docker image inspect ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/$service:latest | jq -r '.[0].Config.Labels."org.opencontainers.image.created"')
+              VCS_REF=$(docker image inspect ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/$service:latest | jq -r '.[0].Config.Labels."org.opencontainers.image.revision"')
+              echo "  - Build Date: $BUILD_DATE" >> supply-chain-report.md
+              echo "  - VCS Ref: $VCS_REF" >> supply-chain-report.md
+            } || echo "  - Image not found" >> supply-chain-report.md
+          done
+
+      - name: Upload supply chain report
+        uses: actions/upload-artifact@v3
+        with:
+          name: supply-chain-audit-report
+          path: |
+            supply-chain-report.md
+            *.json
+
+  # Notification and reporting
+  security-notification:
+    name: Security Notification
+    runs-on: ubuntu-latest
+    needs:
+      [
+        vulnerability-scan,
+        compliance-scan,
+        runtime-security,
+        supply-chain-audit,
+      ]
+    if: always()
+    steps:
+      - name: Collect security status
+        id: security-status
+        run: |
+          VULN_STATUS="${{ needs.vulnerability-scan.result }}"
+          COMPLIANCE_STATUS="${{ needs.compliance-scan.result }}"
+          RUNTIME_STATUS="${{ needs.runtime-security.result }}"
+          SUPPLY_CHAIN_STATUS="${{ needs.supply-chain-audit.result }}"
+
+          if [[ "$VULN_STATUS" == "failure" || "$COMPLIANCE_STATUS" == "failure" || "$RUNTIME_STATUS" == "failure" || "$SUPPLY_CHAIN_STATUS" == "failure" ]]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=Security scan failures detected" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=All security scans passed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Slack notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ steps.security-status.outputs.status }}
+          text: |
+            🔒 Container Security Scan Results
+
+            Status: ${{ steps.security-status.outputs.message }}
+
+            - Vulnerability Scan: ${{ needs.vulnerability-scan.result }}
+            - Compliance Scan: ${{ needs.compliance-scan.result }}  
+            - Runtime Security: ${{ needs.runtime-security.result }}
+            - Supply Chain Audit: ${{ needs.supply-chain-audit.result }}
+
+            Workflow: ${{ github.workflow }}
+            Repository: ${{ github.repository }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        if: always()

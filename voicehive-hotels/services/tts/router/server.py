@@ -319,10 +319,77 @@ class TTSRouter:
         
     async def _synthesize_azure(self, request: TTSRequest, voice_name: str) -> tuple[str, float]:
         """Synthesize using Azure Speech Service"""
-        # TODO: Implement Azure Speech Service integration
-        # This would use the Azure Speech SDK
-        # For now, return mock data
-        return await self._synthesize_mock(request)
+        if not AZURE_SPEECH_KEY or not AZURE_SPEECH_REGION:
+            raise HTTPException(status_code=500, detail="Azure Speech Service not configured")
+        
+        try:
+            # Construct Azure Speech Service URL
+            azure_url = f"https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
+            
+            # Create SSML for Azure Speech Service
+            ssml = f"""
+            <speak version='1.0' xml:lang='{request.language}'>
+                <voice xml:lang='{request.language}' name='{voice_name}'>
+                    <prosody rate='{request.speed}' pitch='{request.pitch or "+0%"}'>
+                        {request.text}
+                    </prosody>
+                </voice>
+            </speak>
+            """.strip()
+            
+            # Prepare headers
+            headers = {
+                "Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY,
+                "Content-Type": "application/ssml+xml",
+                "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3" if request.format == "mp3" else "riff-24khz-16bit-mono-pcm",
+                "User-Agent": "VoiceHive-TTS-Router"
+            }
+            
+            # Make request to Azure Speech Service
+            response = await self.http_client.post(
+                azure_url,
+                content=ssml,
+                headers=headers
+            )
+            
+            if response.status_code != 200:
+                error_text = response.text
+                logger.error(f"Azure Speech Service error: {response.status_code} - {error_text}")
+                
+                # Handle specific Azure error codes according to documentation
+                if response.status_code == 401:
+                    raise Exception("Azure Speech Service authentication failed - check API key and region")
+                elif response.status_code == 429:
+                    raise Exception("Azure Speech Service rate limit exceeded - too many requests")
+                elif response.status_code == 415:
+                    raise Exception("Azure Speech Service unsupported media type - check Content-Type header")
+                elif response.status_code == 502:
+                    raise Exception("Azure Speech Service bad gateway - network or server issue")
+                elif response.status_code == 503:
+                    raise Exception("Azure Speech Service temporarily unavailable")
+                else:
+                    raise Exception(f"Azure Speech Service error: {response.status_code} - {error_text}")
+            
+            # Get audio data
+            audio_bytes = response.content
+            audio_base64 = base64.b64encode(audio_bytes).decode()
+            
+            # Estimate duration based on text length and speech rate
+            # Rough calculation: average speaking rate is ~150 words per minute
+            words = len(request.text.split())
+            base_duration_seconds = (words / 150) * 60  # Base duration in seconds
+            adjusted_duration = base_duration_seconds / request.speed  # Adjust for speed
+            duration_ms = adjusted_duration * 1000
+            
+            logger.info(f"Azure TTS synthesis successful: {len(audio_bytes)} bytes, ~{duration_ms:.0f}ms")
+            
+            return audio_base64, duration_ms
+            
+        except Exception as e:
+            logger.error(f"Azure Speech Service synthesis failed: {e}")
+            # Fallback to mock if Azure fails
+            logger.warning("Falling back to mock TTS due to Azure failure")
+            return await self._synthesize_mock(request)
         
     async def _synthesize_mock(self, request: TTSRequest) -> tuple[str, float]:
         """Mock TTS synthesis for development"""

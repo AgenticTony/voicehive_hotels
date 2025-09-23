@@ -1,0 +1,213 @@
+# Dependency Security & Vulnerability Management Configuration
+
+vulnerability_scanners:
+  safety:
+    enabled: true
+    # API key should be set via SAFETY_API_KEY environment variable
+    api_key: null
+    ignore_ids: [] # List of vulnerability IDs to ignore
+    severity_threshold: "medium" # minimum severity to report
+
+  pip_audit:
+    enabled: true
+    format: "json"
+    severity_threshold: "medium"
+    # Additional pip-audit options
+    ignore_vulns: [] # List of vulnerability IDs to ignore
+
+  # Future: Add support for other scanners
+  bandit:
+    enabled: false # Static security analysis for Python code
+
+  semgrep:
+    enabled: false # Static analysis security scanner
+
+license_compliance:
+  # Licenses that are allowed in the project
+  allowed_licenses:
+    - "MIT"
+    - "Apache-2.0"
+    - "Apache Software License"
+    - "BSD-3-Clause"
+    - "BSD-2-Clause"
+    - "ISC"
+    - "Python Software Foundation License"
+    - "Mozilla Public License 2.0 (MPL 2.0)"
+    - "BSD License"
+    - "Apache License"
+
+  # Licenses that are forbidden (copyleft licenses that may cause issues)
+  forbidden_licenses:
+    - "GPL-3.0"
+    - "GPL-2.0"
+    - "AGPL-3.0"
+    - "LGPL-3.0"
+    - "LGPL-2.1"
+    - "Copyleft"
+
+  # Whether to require license checking
+  require_license_check: true
+
+  # Action to take on license violations
+  license_violation_action: "warn" # Options: "warn", "fail", "ignore"
+
+update_policy:
+  # Automatically update packages with security vulnerabilities
+  auto_update_security: true
+
+  # Automatically update minor versions (x.Y.z)
+  auto_update_minor: false
+
+  # Automatically update major versions (X.y.z) - usually not recommended
+  auto_update_major: false
+
+  # Run tests before applying updates
+  test_before_update: true
+
+  # Maximum age of dependencies before flagging as outdated (days)
+  max_dependency_age_days: 365
+
+  # Exclude packages from automatic updates
+  update_exclusions:
+    - "tensorflow" # Example: ML packages that need careful version management
+    - "torch"
+
+  # Pin critical packages that should not be auto-updated
+  pinned_packages:
+    - "fastapi" # Core framework - update manually
+    - "pydantic" # Core data validation - update manually
+
+hash_verification:
+  # Enable hash verification for supply chain security
+  enabled: true
+
+  # Hash algorithm to use
+  algorithm: "sha256"
+
+  # Require hashes for all packages
+  require_hashes: true
+
+  # Trusted package indexes
+  trusted_hosts:
+    - "pypi.org"
+    - "files.pythonhosted.org"
+
+notifications:
+  # Slack webhook URL for notifications (set via SLACK_WEBHOOK_URL env var)
+  slack_webhook: null
+
+  # Email recipients for security notifications
+  email_recipients: []
+
+  # Minimum severity level for notifications
+  severity_threshold: "high"
+
+  # Notification channels
+  channels:
+    critical: ["slack", "email", "github_issue"]
+    high: ["slack", "email"]
+    medium: ["slack"]
+    low: []
+
+security_policies:
+  # Maximum number of days to fix critical vulnerabilities
+  critical_fix_deadline_days: 1
+
+  # Maximum number of days to fix high severity vulnerabilities
+  high_fix_deadline_days: 7
+
+  # Maximum number of days to fix medium severity vulnerabilities
+  medium_fix_deadline_days: 30
+
+  # Whether to fail CI/CD on security vulnerabilities
+  fail_build_on_vulnerabilities:
+    critical: true
+    high: true
+    medium: false
+    low: false
+
+reporting:
+  # Output formats for security reports
+  formats:
+    - "json"
+    - "markdown"
+    - "html"
+    - "sarif" # For GitHub Security tab integration
+
+  # Report storage location
+  output_directory: "security-reports"
+
+  # Include detailed vulnerability information
+  include_details: true
+
+  # Include remediation suggestions
+  include_remediation: true
+
+  # Generate trend analysis
+  include_trends: true
+
+monitoring:
+  # Enable continuous monitoring
+  enabled: true
+
+  # Monitoring frequency
+  scan_frequency: "daily" # Options: "hourly", "daily", "weekly"
+
+  # Monitor for new advisories
+  advisory_monitoring: true
+
+  # Sources for security advisories
+  advisory_sources:
+    - "github"
+    - "pypi"
+    - "nvd" # National Vulnerability Database
+    - "safety_db"
+
+# Integration settings
+integrations:
+  github:
+    # Create GitHub issues for vulnerabilities
+    create_issues: true
+
+    # Labels to apply to security issues
+    issue_labels:
+      - "security"
+      - "vulnerability"
+      - "dependencies"
+
+    # Assignees for security issues
+    issue_assignees: []
+
+  jira:
+    enabled: false
+    # JIRA integration settings would go here
+
+  slack:
+    # Slack integration settings
+    enabled: true
+    # Channel for security notifications
+    channel: "#security-alerts"
+
+  prometheus:
+    # Export metrics to Prometheus
+    enabled: true
+    # Metrics to export
+    metrics:
+      - "vulnerability_count_by_severity"
+      - "outdated_dependencies_count"
+      - "license_violations_count"
+      - "scan_duration_seconds"
+
+# Development and testing settings
+development:
+  # Skip certain checks in development
+  skip_license_check: false
+
+  # Allow insecure packages in development
+  allow_insecure_dev: false
+
+  # Development-only dependencies file
+  dev_requirements_file: "requirements-dev.txt"
+
+  # Test requirements file
+  test_requirements_file: "requirements-test.txt"

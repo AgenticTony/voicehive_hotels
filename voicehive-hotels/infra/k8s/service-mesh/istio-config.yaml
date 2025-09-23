@@ -1,0 +1,462 @@
+# Istio Service Mesh Configuration for Zero-Trust mTLS
+# Based on Istio official documentation and production security best practices
+
+---
+# Istio Installation Configuration
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: voicehive-control-plane
+  namespace: istio-system
+spec:
+  values:
+    global:
+      meshID: voicehive-mesh
+      multiCluster:
+        clusterName: voicehive-production
+      network: voicehive-network
+    pilot:
+      env:
+        EXTERNAL_ISTIOD: false
+        PILOT_ENABLE_WORKLOAD_ENTRY_AUTOREGISTRATION: true
+        PILOT_ENABLE_CROSS_CLUSTER_WORKLOAD_ENTRY: true
+  components:
+    pilot:
+      k8s:
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2048Mi
+          limits:
+            cpu: 1000m
+            memory: 4096Mi
+        hpaSpec:
+          minReplicas: 2
+          maxReplicas: 5
+          metrics:
+            - type: Resource
+              resource:
+                name: cpu
+                target:
+                  type: Utilization
+                  averageUtilization: 80
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 2000m
+              memory: 1024Mi
+          hpaSpec:
+            minReplicas: 2
+            maxReplicas: 5
+          service:
+            type: LoadBalancer
+            annotations:
+              service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+              service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+              service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:eu-west-1:123456789012:certificate/voicehive-cert"
+              service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "https"
+    egressGateways:
+      - name: istio-egressgateway
+        enabled: true
+        k8s:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 2000m
+              memory: 1024Mi
+
+---
+# Mesh-wide Strict mTLS Policy
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default-strict-mtls
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: mtls
+spec:
+  mtls:
+    mode: STRICT
+
+---
+# Namespace-specific mTLS Policy for VoiceHive
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: voicehive-strict-mtls
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: mtls
+spec:
+  mtls:
+    mode: STRICT
+
+---
+# Authorization Policy - Default Deny
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: default-deny
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: authorization
+spec:
+  # Empty spec means deny all
+
+---
+# Authorization Policy - Orchestrator Service
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: orchestrator-authz
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: orchestrator
+    security.voicehive.io/policy-type: authorization
+spec:
+  selector:
+    matchLabels:
+      app: orchestrator
+  rules:
+    # Allow ingress gateway
+    - from:
+        - source:
+            principals:
+              [
+                "cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account",
+              ]
+      to:
+        - operation:
+            methods: ["GET", "POST", "PUT", "DELETE"]
+            paths: ["/api/*", "/healthz", "/metrics"]
+    # Allow internal services
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voicehive/sa/voicehive-livekit-agent"
+              - "cluster.local/ns/voicehive/sa/voicehive-tts-router"
+              - "cluster.local/ns/voicehive/sa/voicehive-riva-asr-proxy"
+      to:
+        - operation:
+            methods: ["GET", "POST"]
+            paths: ["/api/*", "/internal/*"]
+    # Allow monitoring
+    - from:
+        - source:
+            principals: ["cluster.local/ns/monitoring/sa/prometheus"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/metrics", "/healthz"]
+
+---
+# Authorization Policy - LiveKit Agent Service
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: livekit-agent-authz
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: livekit-agent
+    security.voicehive.io/policy-type: authorization
+spec:
+  selector:
+    matchLabels:
+      app: livekit-agent
+  rules:
+    # Allow orchestrator
+    - from:
+        - source:
+            principals: ["cluster.local/ns/voicehive/sa/voicehive-orchestrator"]
+      to:
+        - operation:
+            methods: ["GET", "POST"]
+            paths: ["/api/*", "/webhook/*"]
+    # Allow monitoring
+    - from:
+        - source:
+            principals: ["cluster.local/ns/monitoring/sa/prometheus"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/metrics", "/healthz"]
+
+---
+# Authorization Policy - TTS Router Service
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: tts-router-authz
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: tts-router
+    security.voicehive.io/policy-type: authorization
+spec:
+  selector:
+    matchLabels:
+      app: tts-router
+  rules:
+    # Allow orchestrator and livekit-agent
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voicehive/sa/voicehive-orchestrator"
+              - "cluster.local/ns/voicehive/sa/voicehive-livekit-agent"
+      to:
+        - operation:
+            methods: ["GET", "POST"]
+            paths: ["/api/*", "/tts/*"]
+    # Allow monitoring
+    - from:
+        - source:
+            principals: ["cluster.local/ns/monitoring/sa/prometheus"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/metrics", "/healthz"]
+
+---
+# Authorization Policy - Riva ASR Proxy Service
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: riva-asr-proxy-authz
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: riva-asr-proxy
+    security.voicehive.io/policy-type: authorization
+spec:
+  selector:
+    matchLabels:
+      app: riva-asr-proxy
+  rules:
+    # Allow orchestrator and livekit-agent
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voicehive/sa/voicehive-orchestrator"
+              - "cluster.local/ns/voicehive/sa/voicehive-livekit-agent"
+      to:
+        - operation:
+            methods: ["GET", "POST"]
+            paths: ["/api/*", "/asr/*"]
+    # Allow monitoring
+    - from:
+        - source:
+            principals: ["cluster.local/ns/monitoring/sa/prometheus"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/metrics", "/healthz"]
+
+---
+# Destination Rule - Orchestrator mTLS
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: orchestrator-mtls
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: orchestrator
+    security.voicehive.io/policy-type: mtls
+spec:
+  host: orchestrator.voicehive.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 50
+        maxRequestsPerConnection: 10
+    circuitBreaker:
+      consecutiveGatewayErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+
+---
+# Destination Rule - LiveKit Agent mTLS
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: livekit-agent-mtls
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: livekit-agent
+    security.voicehive.io/policy-type: mtls
+spec:
+  host: livekit-agent.voicehive.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      tcp:
+        maxConnections: 50
+      http:
+        http1MaxPendingRequests: 25
+        maxRequestsPerConnection: 5
+    circuitBreaker:
+      consecutiveGatewayErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+
+---
+# Destination Rule - TTS Router mTLS
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: tts-router-mtls
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: tts-router
+    security.voicehive.io/policy-type: mtls
+spec:
+  host: tts-router.voicehive.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      tcp:
+        maxConnections: 30
+      http:
+        http1MaxPendingRequests: 15
+        maxRequestsPerConnection: 5
+    circuitBreaker:
+      consecutiveGatewayErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+
+---
+# Destination Rule - Riva ASR Proxy mTLS
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: riva-asr-proxy-mtls
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: riva-asr-proxy
+    security.voicehive.io/policy-type: mtls
+spec:
+  host: riva-asr-proxy.voicehive.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      tcp:
+        maxConnections: 30
+      http:
+        http1MaxPendingRequests: 15
+        maxRequestsPerConnection: 5
+    circuitBreaker:
+      consecutiveGatewayErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionTime: 300s
+      maxEjectionPercent: 50
+
+---
+# Gateway Configuration for External Traffic
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: voicehive-gateway
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: voicehive-tls-cert
+      hosts:
+        - "api.voicehive-hotels.com"
+        - "webhooks.voicehive-hotels.com"
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "api.voicehive-hotels.com"
+        - "webhooks.voicehive-hotels.com"
+      tls:
+        httpsRedirect: true
+
+---
+# Virtual Service for Orchestrator
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: orchestrator-vs
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: orchestrator
+spec:
+  hosts:
+    - "api.voicehive-hotels.com"
+    - "webhooks.voicehive-hotels.com"
+  gateways:
+    - voicehive-gateway
+  http:
+    - match:
+        - uri:
+            prefix: "/api/"
+        - uri:
+            prefix: "/webhook/"
+        - uri:
+            exact: "/healthz"
+      route:
+        - destination:
+            host: orchestrator.voicehive.svc.cluster.local
+            port:
+              number: 80
+      timeout: 30s
+      retries:
+        attempts: 3
+        perTryTimeout: 10s
+        retryOn: 5xx,reset,connect-failure,refused-stream
+      headers:
+        request:
+          add:
+            X-Forwarded-Proto: https
+          remove:
+            - X-Internal-Token
+        response:
+          add:
+            X-Content-Type-Options: nosniff
+            X-Frame-Options: DENY
+            X-XSS-Protection: "1; mode=block"
+            Strict-Transport-Security: "max-age=31536000; includeSubDomains"

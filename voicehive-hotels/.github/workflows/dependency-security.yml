@@ -1,0 +1,543 @@
+name: Dependency Security & Vulnerability Management
+
+on:
+  # Run on every push and PR
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+  # Daily security scans
+  schedule:
+    - cron: "0 6 * * *" # 6 AM UTC daily
+
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: "Type of security scan"
+        required: true
+        type: choice
+        options:
+          - vulnerability_scan
+          - license_audit
+          - dependency_update
+          - full_audit
+        default: "vulnerability_scan"
+      service:
+        description: "Service to scan (or 'all')"
+        required: false
+        default: "all"
+      severity_threshold:
+        description: "Minimum severity to report"
+        required: false
+        type: choice
+        options:
+          - low
+          - medium
+          - high
+          - critical
+        default: "medium"
+
+env:
+  PYTHON_VERSION: "3.11"
+  SAFETY_API_KEY: ${{ secrets.SAFETY_API_KEY }}
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+permissions:
+  contents: read
+  security-events: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  # Install and setup security tools
+  setup-security-tools:
+    name: Setup Security Tools
+    runs-on: ubuntu-latest
+    outputs:
+      tools-cache-key: ${{ steps.cache-key.outputs.key }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Generate cache key
+        id: cache-key
+        run: |
+          echo "key=security-tools-${{ runner.os }}-${{ hashFiles('scripts/security/requirements-security-tools.txt') }}" >> $GITHUB_OUTPUT
+
+      - name: Cache security tools
+        id: cache-tools
+        uses: actions/cache@v3
+        with:
+          path: ~/.local
+          key: ${{ steps.cache-key.outputs.key }}
+
+      - name: Install security tools
+        if: steps.cache-tools.outputs.cache-hit != 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install --user safety pip-audit pip-tools bandit semgrep
+          pip install --user requests pyyaml packaging
+
+      - name: Verify tool installation
+        run: |
+          export PATH=$HOME/.local/bin:$PATH
+          safety --version
+          pip-audit --version
+          pip-compile --version
+          bandit --version
+
+  # Vulnerability scanning for all services
+  vulnerability-scan:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    needs: setup-security-tools
+    if: github.event_name == 'schedule' || github.event.inputs.scan_type == 'vulnerability_scan' || github.event.inputs.scan_type == 'full_audit' || github.event_name == 'push' || github.event_name == 'pull_request'
+    strategy:
+      matrix:
+        service:
+          [
+            orchestrator,
+            connectors,
+            riva-proxy,
+            tts-router,
+            media-agent,
+            pii-scanner,
+          ]
+      fail-fast: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Restore security tools cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.local
+          key: ${{ needs.setup-security-tools.outputs.tools-cache-key }}
+
+      - name: Add tools to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies for scanning
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pyyaml packaging
+
+      - name: Run vulnerability scan
+        id: vuln-scan
+        run: |
+          python scripts/security/dependency-security-manager.py scan \
+            --service ${{ matrix.service }} \
+            --format json \
+            --output vulnerability-report-${{ matrix.service }}.json
+        continue-on-error: true
+
+      - name: Parse scan results
+        id: parse-results
+        run: |
+          if [ -f "vulnerability-report-${{ matrix.service }}.json" ]; then
+            CRITICAL_COUNT=$(jq -r '.reports."${{ matrix.service }}".critical_vulnerabilities // 0' vulnerability-report-${{ matrix.service }}.json)
+            HIGH_COUNT=$(jq -r '.reports."${{ matrix.service }}".high_vulnerabilities // 0' vulnerability-report-${{ matrix.service }}.json)
+            TOTAL_VULNS=$(jq -r '.reports."${{ matrix.service }}".vulnerabilities | length' vulnerability-report-${{ matrix.service }}.json)
+            
+            echo "critical_count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+            echo "high_count=$HIGH_COUNT" >> $GITHUB_OUTPUT
+            echo "total_vulns=$TOTAL_VULNS" >> $GITHUB_OUTPUT
+            
+            # Set job status based on vulnerabilities
+            if [ "$CRITICAL_COUNT" -gt 0 ]; then
+              echo "status=critical" >> $GITHUB_OUTPUT
+              echo "::error::$CRITICAL_COUNT critical vulnerabilities found in ${{ matrix.service }}"
+            elif [ "$HIGH_COUNT" -gt 0 ]; then
+              echo "status=high" >> $GITHUB_OUTPUT
+              echo "::warning::$HIGH_COUNT high-severity vulnerabilities found in ${{ matrix.service }}"
+            else
+              echo "status=clean" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "status=error" >> $GITHUB_OUTPUT
+            echo "::error::Failed to generate vulnerability report for ${{ matrix.service }}"
+          fi
+
+      - name: Generate SARIF report
+        if: always()
+        run: |
+          python scripts/security/convert-to-sarif.py \
+            --input vulnerability-report-${{ matrix.service }}.json \
+            --output vulnerability-${{ matrix.service }}.sarif \
+            --service ${{ matrix.service }}
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: vulnerability-${{ matrix.service }}.sarif
+          category: dependency-vulnerabilities-${{ matrix.service }}
+
+      - name: Upload vulnerability report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: vulnerability-report-${{ matrix.service }}
+          path: |
+            vulnerability-report-${{ matrix.service }}.json
+            vulnerability-${{ matrix.service }}.sarif
+
+      - name: Create security issue for critical vulnerabilities
+        if: steps.parse-results.outputs.status == 'critical' && github.event_name != 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const reportPath = `vulnerability-report-${{ matrix.service }}.json`;
+
+            if (fs.existsSync(reportPath)) {
+              const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+              const serviceReport = report.reports['${{ matrix.service }}'];
+              
+              const criticalVulns = serviceReport.vulnerabilities.filter(v => v.severity === 'critical');
+              
+              let body = `## 🚨 Critical Security Vulnerabilities Detected\n\n`;
+              body += `**Service**: ${{ matrix.service }}\n`;
+              body += `**Critical Vulnerabilities**: ${criticalVulns.length}\n`;
+              body += `**Scan Date**: ${new Date().toISOString()}\n\n`;
+              
+              body += `### Critical Vulnerabilities\n\n`;
+              criticalVulns.forEach(vuln => {
+                body += `#### ${vuln.id} - ${vuln.package}\n`;
+                body += `- **Installed Version**: ${vuln.installed_version}\n`;
+                body += `- **Fixed Version**: ${vuln.fixed_version || 'Not available'}\n`;
+                body += `- **Description**: ${vuln.description}\n`;
+                if (vuln.cve) body += `- **CVE**: ${vuln.cve}\n`;
+                if (vuln.advisory_url) body += `- **Advisory**: ${vuln.advisory_url}\n`;
+                body += `\n`;
+              });
+              
+              body += `### Immediate Actions Required\n\n`;
+              serviceReport.recommendations.forEach(rec => {
+                body += `- ${rec}\n`;
+              });
+              
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `🚨 Critical Security Vulnerabilities in ${{ matrix.service }}`,
+                body: body,
+                labels: ['security', 'critical', 'vulnerability', '${{ matrix.service }}'],
+                assignees: []  // Add default assignees if needed
+              });
+            }
+
+      - name: Fail job on critical vulnerabilities
+        if: steps.parse-results.outputs.status == 'critical'
+        run: |
+          echo "Critical vulnerabilities found in ${{ matrix.service }}. Failing the job."
+          exit 1
+
+  # License compliance audit
+  license-audit:
+    name: License Compliance Audit
+    runs-on: ubuntu-latest
+    needs: setup-security-tools
+    if: github.event.inputs.scan_type == 'license_audit' || github.event.inputs.scan_type == 'full_audit' || github.event_name == 'schedule'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Restore security tools cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.local
+          key: ${{ needs.setup-security-tools.outputs.tools-cache-key }}
+
+      - name: Add tools to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install license checking tools
+        run: |
+          pip install pip-licenses licensecheck
+
+      - name: Run license audit
+        run: |
+          # Generate license report for each service
+          for service in orchestrator connectors riva-proxy tts-router media-agent; do
+            if [ -f "services/$service/requirements.txt" ] || [ "$service" = "connectors" ]; then
+              echo "Auditing licenses for $service..."
+              
+              REQ_FILE="services/$service/requirements.txt"
+              if [ "$service" = "connectors" ]; then
+                REQ_FILE="connectors/requirements-test.txt"
+              fi
+              
+              if [ -f "$REQ_FILE" ]; then
+                # Install packages in temporary environment to check licenses
+                python -m venv temp_env_$service
+                source temp_env_$service/bin/activate
+                pip install -r "$REQ_FILE"
+                pip-licenses --format json --output-file license-report-$service.json
+                deactivate
+                rm -rf temp_env_$service
+              fi
+            fi
+          done
+
+      - name: Check license compliance
+        run: |
+          python scripts/security/check-license-compliance.py \
+            --config config/security/dependency-security-config.yaml \
+            --reports license-report-*.json \
+            --output license-compliance-report.json
+
+      - name: Upload license reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: license-compliance-reports
+          path: |
+            license-report-*.json
+            license-compliance-report.json
+
+  # Dependency update automation
+  dependency-update:
+    name: Automated Dependency Updates
+    runs-on: ubuntu-latest
+    needs: [setup-security-tools, vulnerability-scan]
+    if: github.event.inputs.scan_type == 'dependency_update' || (github.event_name == 'schedule' && github.ref == 'refs/heads/main')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Restore security tools cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.local
+          key: ${{ needs.setup-security-tools.outputs.tools-cache-key }}
+
+      - name: Add tools to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      - name: Update security vulnerabilities
+        run: |
+          python scripts/security/dependency-security-manager.py update \
+            --service all \
+            --security-only
+
+      - name: Pin dependencies with hashes
+        run: |
+          python scripts/security/dependency-security-manager.py pin \
+            --service all \
+            --with-hashes
+
+      - name: Run tests after updates
+        run: |
+          # Run basic tests to ensure updates don't break functionality
+          for service in orchestrator connectors; do
+            if [ -f "services/$service/requirements.txt" ] || [ "$service" = "connectors" ]; then
+              echo "Testing $service after updates..."
+              
+              # Create test environment
+              python -m venv test_env_$service
+              source test_env_$service/bin/activate
+              
+              REQ_FILE="services/$service/requirements.txt"
+              if [ "$service" = "connectors" ]; then
+                REQ_FILE="connectors/requirements-test.txt"
+              fi
+              
+              pip install -r "$REQ_FILE"
+              
+              # Run basic import tests
+              if [ "$service" = "orchestrator" ]; then
+                python -c "import fastapi; import uvicorn; import pydantic; print('Basic imports successful')"
+              elif [ "$service" = "connectors" ]; then
+                python -c "import pytest; print('Test framework imports successful')"
+              fi
+              
+              deactivate
+              rm -rf test_env_$service
+            fi
+          done
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.changes.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "security: automated dependency security updates"
+          title: "🔒 Automated Security Dependency Updates"
+          body: |
+            ## Automated Security Dependency Updates
+
+            This PR contains automated security updates for dependencies with known vulnerabilities.
+
+            ### Changes Made
+            - Updated packages with security vulnerabilities to fixed versions
+            - Pinned all dependencies with SHA256 hashes for supply chain security
+            - Verified basic functionality with import tests
+
+            ### Security Scan Results
+            Please review the security scan artifacts from the workflow run.
+
+            ### Testing
+            - [x] Basic import tests passed
+            - [ ] Full test suite (run manually)
+            - [ ] Integration tests (run manually)
+
+            **Note**: This PR was automatically generated. Please review changes carefully before merging.
+          branch: automated-security-updates
+          delete-branch: true
+          labels: |
+            security
+            dependencies
+            automated
+
+  # Generate comprehensive security report
+  security-report:
+    name: Generate Security Report
+    runs-on: ubuntu-latest
+    needs: [vulnerability-scan, license-audit]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install report generation tools
+        run: |
+          pip install jinja2 markdown
+
+      - name: Generate comprehensive report
+        run: |
+          python scripts/security/generate-security-dashboard.py \
+            --vulnerability-reports vulnerability-report-*/vulnerability-report-*.json \
+            --license-reports license-compliance-reports/license-compliance-report.json \
+            --output security-dashboard.html \
+            --format html
+
+      - name: Upload security dashboard
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-dashboard
+          path: |
+            security-dashboard.html
+            security-dashboard.json
+
+      - name: Deploy to GitHub Pages (if main branch)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'schedule'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./
+          destination_dir: security-reports
+          keep_files: true
+
+  # Notification and alerting
+  notify-security-status:
+    name: Security Status Notification
+    runs-on: ubuntu-latest
+    needs: [vulnerability-scan, license-audit, dependency-update]
+    if: always()
+    steps:
+      - name: Determine overall status
+        id: status
+        run: |
+          VULN_STATUS="${{ needs.vulnerability-scan.result }}"
+          LICENSE_STATUS="${{ needs.license-audit.result }}"
+          UPDATE_STATUS="${{ needs.dependency-update.result }}"
+
+          if [[ "$VULN_STATUS" == "failure" ]]; then
+            echo "status=critical" >> $GITHUB_OUTPUT
+            echo "message=Critical vulnerabilities detected" >> $GITHUB_OUTPUT
+          elif [[ "$LICENSE_STATUS" == "failure" ]]; then
+            echo "status=warning" >> $GITHUB_OUTPUT
+            echo "message=License compliance issues detected" >> $GITHUB_OUTPUT
+          elif [[ "$UPDATE_STATUS" == "failure" ]]; then
+            echo "status=warning" >> $GITHUB_OUTPUT
+            echo "message=Dependency update issues" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=All security checks passed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Slack notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ steps.status.outputs.status }}
+          text: |
+            🔒 **Dependency Security Scan Results**
+
+            **Status**: ${{ steps.status.outputs.message }}
+            **Repository**: ${{ github.repository }}
+            **Branch**: ${{ github.ref_name }}
+            **Workflow**: ${{ github.workflow }}
+
+            **Results**:
+            - Vulnerability Scan: ${{ needs.vulnerability-scan.result }}
+            - License Audit: ${{ needs.license-audit.result }}
+            - Dependency Updates: ${{ needs.dependency-update.result }}
+
+            **Action Required**: ${{ steps.status.outputs.status == 'critical' && 'IMMEDIATE' || steps.status.outputs.status == 'warning' && 'Review needed' || 'None' }}
+          webhook_url: ${{ env.SLACK_WEBHOOK_URL }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Update security badge
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # Generate security status badge
+          STATUS="${{ steps.status.outputs.status }}"
+          COLOR="red"
+          MESSAGE="unknown"
+
+          case $STATUS in
+            "success") COLOR="green"; MESSAGE="secure" ;;
+            "warning") COLOR="yellow"; MESSAGE="warnings" ;;
+            "critical") COLOR="red"; MESSAGE="vulnerabilities" ;;
+          esac
+
+          # This would update a security badge in the README or create a status file
+          echo "Security Status: $MESSAGE" > security-status.txt

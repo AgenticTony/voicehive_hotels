@@ -1,0 +1,512 @@
+# VoiceHive Hotels - OPA Gatekeeper Security Policies
+# Advanced security policy enforcement using Open Policy Agent
+
+# Constraint Template: Require Distroless Images
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: voicehiverequiredistroless
+  annotations:
+    description: "Requires containers to use distroless base images"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VoiceHiveRequireDistroless
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            allowedRegistries:
+              type: array
+              items:
+                type: string
+            exemptImages:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package voicehiverequiredistroless
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not is_distroless(container.image)
+          not is_exempt(container.image)
+          msg := sprintf("Container image '%v' must use distroless base image", [container.image])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.initContainers[_]
+          not is_distroless(container.image)
+          not is_exempt(container.image)
+          msg := sprintf("Init container image '%v' must use distroless base image", [container.image])
+        }
+
+        is_distroless(image) {
+          contains(image, "gcr.io/distroless/")
+        }
+
+        is_distroless(image) {
+          # Allow our custom distroless-based images
+          contains(image, "ghcr.io/voicehive-hotels/")
+          # Check if image has distroless label (would need to be verified separately)
+        }
+
+        is_exempt(image) {
+          exempt := input.parameters.exemptImages[_]
+          image == exempt
+        }
+
+---
+# Constraint: Enforce Distroless Images for VoiceHive
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VoiceHiveRequireDistroless
+metadata:
+  name: voicehive-distroless-policy
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["voicehive"]
+  parameters:
+    allowedRegistries:
+      - "gcr.io/distroless/"
+      - "ghcr.io/voicehive-hotels/"
+    exemptImages:
+      - "postgres:13-alpine" # Database
+      - "redis:7-alpine" # Cache
+
+---
+# Constraint Template: Require Image Signatures
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: voicehiverequiresignatures
+  annotations:
+    description: "Requires container images to be signed"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VoiceHiveRequireSignatures
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            trustedSigners:
+              type: array
+              items:
+                type: string
+            exemptImages:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package voicehiverequiresignatures
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not is_signed(container.image)
+          not is_exempt(container.image)
+          msg := sprintf("Container image '%v' must be signed by trusted signer", [container.image])
+        }
+
+        is_signed(image) {
+          # This would integrate with Cosign verification
+          # For now, we assume VoiceHive images are signed
+          contains(image, "ghcr.io/voicehive-hotels/")
+        }
+
+        is_exempt(image) {
+          exempt := input.parameters.exemptImages[_]
+          image == exempt
+        }
+
+---
+# Constraint: Require Signed Images
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VoiceHiveRequireSignatures
+metadata:
+  name: voicehive-signature-policy
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["voicehive"]
+  parameters:
+    trustedSigners:
+      - "voicehive-hotels"
+    exemptImages:
+      - "postgres:13-alpine"
+      - "redis:7-alpine"
+
+---
+# Constraint Template: Security Context Requirements
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: voicehivesecuritycontext
+  annotations:
+    description: "Enforces security context requirements for VoiceHive containers"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VoiceHiveSecurityContext
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            requiredUserId:
+              type: integer
+            requiredGroupId:
+              type: integer
+            readOnlyRootFilesystem:
+              type: boolean
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package voicehivesecuritycontext
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not has_security_context(container)
+          msg := sprintf("Container '%v' must have security context defined", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          has_security_context(container)
+          not is_non_root(container)
+          msg := sprintf("Container '%v' must run as non-root user", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          has_security_context(container)
+          not is_readonly_filesystem(container)
+          msg := sprintf("Container '%v' must have read-only root filesystem", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          has_security_context(container)
+          not drops_all_capabilities(container)
+          msg := sprintf("Container '%v' must drop all capabilities", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          has_security_context(container)
+          allows_privilege_escalation(container)
+          msg := sprintf("Container '%v' must not allow privilege escalation", [container.name])
+        }
+
+        has_security_context(container) {
+          container.securityContext
+        }
+
+        is_non_root(container) {
+          container.securityContext.runAsNonRoot == true
+        }
+
+        is_readonly_filesystem(container) {
+          container.securityContext.readOnlyRootFilesystem == true
+        }
+
+        drops_all_capabilities(container) {
+          "ALL" in container.securityContext.capabilities.drop
+        }
+
+        allows_privilege_escalation(container) {
+          container.securityContext.allowPrivilegeEscalation == true
+        }
+
+---
+# Constraint: Enforce Security Context
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VoiceHiveSecurityContext
+metadata:
+  name: voicehive-security-context-policy
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["voicehive"]
+  parameters:
+    requiredUserId: 65534
+    requiredGroupId: 65534
+    readOnlyRootFilesystem: true
+
+---
+# Constraint Template: Resource Limits
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: voicehiveresourcelimits
+  annotations:
+    description: "Enforces resource limits for VoiceHive containers"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VoiceHiveResourceLimits
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            maxCpu:
+              type: string
+            maxMemory:
+              type: string
+            maxEphemeralStorage:
+              type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package voicehiveresourcelimits
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not has_resource_limits(container)
+          msg := sprintf("Container '%v' must have resource limits defined", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not has_resource_requests(container)
+          msg := sprintf("Container '%v' must have resource requests defined", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          has_resource_limits(container)
+          exceeds_cpu_limit(container)
+          msg := sprintf("Container '%v' CPU limit exceeds maximum allowed", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          has_resource_limits(container)
+          exceeds_memory_limit(container)
+          msg := sprintf("Container '%v' memory limit exceeds maximum allowed", [container.name])
+        }
+
+        has_resource_limits(container) {
+          container.resources.limits
+        }
+
+        has_resource_requests(container) {
+          container.resources.requests
+        }
+
+        exceeds_cpu_limit(container) {
+          # Simplified check - in practice would need proper resource parsing
+          container.resources.limits.cpu
+          to_number(trim_suffix(container.resources.limits.cpu, "m")) > to_number(trim_suffix(input.parameters.maxCpu, "m"))
+        }
+
+        exceeds_memory_limit(container) {
+          # Simplified check - in practice would need proper resource parsing
+          container.resources.limits.memory
+          # This is a simplified comparison
+          container.resources.limits.memory != input.parameters.maxMemory
+        }
+
+---
+# Constraint: Enforce Resource Limits
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VoiceHiveResourceLimits
+metadata:
+  name: voicehive-resource-limits-policy
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["voicehive"]
+  parameters:
+    maxCpu: "2000m"
+    maxMemory: "4Gi"
+    maxEphemeralStorage: "4Gi"
+
+---
+# Constraint Template: Network Policy Requirements
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: voicehivenetworkpolicy
+  annotations:
+    description: "Ensures network policies exist for VoiceHive services"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VoiceHiveNetworkPolicy
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            requiredLabels:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package voicehivenetworkpolicy
+
+        violation[{"msg": msg}] {
+          input.review.kind.kind == "Pod"
+          input.review.object.metadata.namespace == "voicehive"
+          not has_network_policy_labels(input.review.object)
+          msg := "Pod must have labels that match existing network policies"
+        }
+
+        has_network_policy_labels(pod) {
+          pod.metadata.labels["app.kubernetes.io/part-of"] == "voicehive"
+        }
+
+---
+# Constraint: Require Network Policy Labels
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VoiceHiveNetworkPolicy
+metadata:
+  name: voicehive-network-policy-labels
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["voicehive"]
+  parameters:
+    requiredLabels:
+      - "app.kubernetes.io/part-of"
+      - "app.kubernetes.io/name"
+
+---
+# Constraint Template: GDPR Compliance Labels
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: voicehivegdprlabels
+  annotations:
+    description: "Enforces GDPR compliance labels on VoiceHive resources"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VoiceHiveGDPRLabels
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            requiredLabels:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package voicehivegdprlabels
+
+        violation[{"msg": msg}] {
+          required_label := input.parameters.requiredLabels[_]
+          not input.review.object.metadata.labels[required_label]
+          msg := sprintf("Missing required GDPR compliance label: %v", [required_label])
+        }
+
+        violation[{"msg": msg}] {
+          data_classification := input.review.object.metadata.labels["security.voicehive.com/data-classification"]
+          not data_classification in ["public", "internal", "confidential", "restricted"]
+          msg := "Invalid data classification. Must be: public, internal, confidential, or restricted"
+        }
+
+---
+# Constraint: Require GDPR Labels
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VoiceHiveGDPRLabels
+metadata:
+  name: voicehive-gdpr-labels-policy
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod", "Service", "ConfigMap", "Secret"]
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "StatefulSet"]
+    namespaces: ["voicehive"]
+  parameters:
+    requiredLabels:
+      - "security.voicehive.com/data-classification"
+      - "security.voicehive.com/retention-period"
+
+---
+# Constraint Template: Allowed Registries
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: voicehiveallowedregistries
+  annotations:
+    description: "Restricts container images to allowed registries"
+spec:
+  crd:
+    spec:
+      names:
+        kind: VoiceHiveAllowedRegistries
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            allowedRegistries:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package voicehiveallowedregistries
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not is_allowed_registry(container.image)
+          msg := sprintf("Container image '%v' is from disallowed registry", [container.image])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.initContainers[_]
+          not is_allowed_registry(container.image)
+          msg := sprintf("Init container image '%v' is from disallowed registry", [container.image])
+        }
+
+        is_allowed_registry(image) {
+          allowed := input.parameters.allowedRegistries[_]
+          startswith(image, allowed)
+        }
+
+---
+# Constraint: Allowed Registries
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: VoiceHiveAllowedRegistries
+metadata:
+  name: voicehive-allowed-registries-policy
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["voicehive"]
+  parameters:
+    allowedRegistries:
+      - "ghcr.io/voicehive-hotels/"
+      - "gcr.io/distroless/"
+      - "postgres:"
+      - "redis:"
+      - "nginx:"

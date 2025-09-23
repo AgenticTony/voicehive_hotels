@@ -1,0 +1,462 @@
+# SLI/SLO Recording Rules for VoiceHive Hotels
+# Production-grade recording rules for Service Level Indicators and Objectives
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: voicehive-sli-slo-recording-rules
+  namespace: voicehive-production
+  labels:
+    app: voicehive-hotels
+    environment: production
+    prometheus: kube-prometheus
+    role: recording-rules
+    type: sli-slo
+spec:
+  groups:
+    # API Availability SLI Recording Rules
+    - name: voicehive.sli.api_availability
+      interval: 30s
+      rules:
+        # Good requests (non-5xx responses)
+        - record: voicehive:api_requests_good:rate5m
+          expr: |
+            sum(rate(voicehive_requests_total{status!~"5.."}[5m])) by (service, instance)
+          labels:
+            sli_type: "availability"
+
+        # Total requests
+        - record: voicehive:api_requests_total:rate5m
+          expr: |
+            sum(rate(voicehive_requests_total[5m])) by (service, instance)
+          labels:
+            sli_type: "availability"
+
+        # API Availability SLI (5m window)
+        - record: voicehive:api_availability:ratio_rate5m
+          expr: |
+            voicehive:api_requests_good:rate5m / voicehive:api_requests_total:rate5m
+          labels:
+            sli_type: "availability"
+
+        # API Availability SLI (30m window for burn rate)
+        - record: voicehive:api_availability:ratio_rate30m
+          expr: |
+            sum(rate(voicehive_requests_total{status!~"5.."}[30m])) by (service, instance) /
+            sum(rate(voicehive_requests_total[30m])) by (service, instance)
+          labels:
+            sli_type: "availability"
+
+        # API Availability SLI (1h window for burn rate)
+        - record: voicehive:api_availability:ratio_rate1h
+          expr: |
+            sum(rate(voicehive_requests_total{status!~"5.."}[1h])) by (service, instance) /
+            sum(rate(voicehive_requests_total[1h])) by (service, instance)
+          labels:
+            sli_type: "availability"
+
+        # API Availability SLI (6h window for burn rate)
+        - record: voicehive:api_availability:ratio_rate6h
+          expr: |
+            sum(rate(voicehive_requests_total{status!~"5.."}[6h])) by (service, instance) /
+            sum(rate(voicehive_requests_total[6h])) by (service, instance)
+          labels:
+            sli_type: "availability"
+
+    # API Latency SLI Recording Rules
+    - name: voicehive.sli.api_latency
+      interval: 30s
+      rules:
+        # Requests under 2s (good latency)
+        - record: voicehive:api_latency_good:rate5m
+          expr: |
+            sum(rate(voicehive_request_duration_seconds_bucket{le="2.0"}[5m])) by (service, instance)
+          labels:
+            sli_type: "latency"
+            threshold: "2s"
+
+        # Total requests for latency calculation
+        - record: voicehive:api_latency_total:rate5m
+          expr: |
+            sum(rate(voicehive_request_duration_seconds_count[5m])) by (service, instance)
+          labels:
+            sli_type: "latency"
+
+        # API Latency SLI (5m window)
+        - record: voicehive:api_latency:ratio_rate5m
+          expr: |
+            voicehive:api_latency_good:rate5m / voicehive:api_latency_total:rate5m
+          labels:
+            sli_type: "latency"
+            threshold: "2s"
+
+        # API Latency SLI (1h window for burn rate)
+        - record: voicehive:api_latency:ratio_rate1h
+          expr: |
+            sum(rate(voicehive_request_duration_seconds_bucket{le="2.0"}[1h])) by (service, instance) /
+            sum(rate(voicehive_request_duration_seconds_count[1h])) by (service, instance)
+          labels:
+            sli_type: "latency"
+            threshold: "2s"
+
+        # API Latency SLI (6h window for burn rate)
+        - record: voicehive:api_latency:ratio_rate6h
+          expr: |
+            sum(rate(voicehive_request_duration_seconds_bucket{le="2.0"}[6h])) by (service, instance) /
+            sum(rate(voicehive_request_duration_seconds_count[6h])) by (service, instance)
+          labels:
+            sli_type: "latency"
+            threshold: "2s"
+
+    # Call Success Rate SLI Recording Rules
+    - name: voicehive.sli.call_success
+      interval: 30s
+      rules:
+        # Successful calls
+        - record: voicehive:calls_success:rate5m
+          expr: |
+            sum(rate(voicehive_call_success_total[5m])) by (hotel_id, language, call_type)
+          labels:
+            sli_type: "business"
+            metric: "call_success"
+
+        # Failed calls
+        - record: voicehive:calls_failure:rate5m
+          expr: |
+            sum(rate(voicehive_call_failures_total[5m])) by (hotel_id, language, call_type)
+          labels:
+            sli_type: "business"
+            metric: "call_failure"
+
+        # Total calls
+        - record: voicehive:calls_total:rate5m
+          expr: |
+            voicehive:calls_success:rate5m + voicehive:calls_failure:rate5m
+          labels:
+            sli_type: "business"
+
+        # Call Success Rate SLI (5m window)
+        - record: voicehive:call_success_rate:ratio_rate5m
+          expr: |
+            voicehive:calls_success:rate5m / voicehive:calls_total:rate5m
+          labels:
+            sli_type: "business"
+            metric: "call_success_rate"
+
+        # Call Success Rate SLI (1h window for burn rate)
+        - record: voicehive:call_success_rate:ratio_rate1h
+          expr: |
+            sum(rate(voicehive_call_success_total[1h])) by (hotel_id, language, call_type) /
+            (sum(rate(voicehive_call_success_total[1h])) by (hotel_id, language, call_type) + 
+             sum(rate(voicehive_call_failures_total[1h])) by (hotel_id, language, call_type))
+          labels:
+            sli_type: "business"
+            metric: "call_success_rate"
+
+    # PMS Connector SLI Recording Rules
+    - name: voicehive.sli.pms_connector
+      interval: 30s
+      rules:
+        # Successful PMS operations
+        - record: voicehive:pms_operations_success:rate5m
+          expr: |
+            sum(rate(voicehive_pms_operations_total{status="success"}[5m])) by (hotel_id, pms_type, operation)
+          labels:
+            sli_type: "integration"
+
+        # Total PMS operations
+        - record: voicehive:pms_operations_total:rate5m
+          expr: |
+            sum(rate(voicehive_pms_operations_total[5m])) by (hotel_id, pms_type, operation)
+          labels:
+            sli_type: "integration"
+
+        # PMS Availability SLI (5m window)
+        - record: voicehive:pms_availability:ratio_rate5m
+          expr: |
+            voicehive:pms_operations_success:rate5m / voicehive:pms_operations_total:rate5m
+          labels:
+            sli_type: "integration"
+
+        # PMS Response Time SLI - requests under 5s
+        - record: voicehive:pms_latency_good:rate5m
+          expr: |
+            sum(rate(voicehive_pms_response_seconds_bucket{le="5.0"}[5m])) by (hotel_id, pms_type, operation)
+          labels:
+            sli_type: "integration"
+            threshold: "5s"
+
+        # PMS Response Time SLI (5m window)
+        - record: voicehive:pms_latency:ratio_rate5m
+          expr: |
+            voicehive:pms_latency_good:rate5m / 
+            sum(rate(voicehive_pms_response_seconds_count[5m])) by (hotel_id, pms_type, operation)
+          labels:
+            sli_type: "integration"
+            threshold: "5s"
+
+    # Authentication SLI Recording Rules
+    - name: voicehive.sli.authentication
+      interval: 30s
+      rules:
+        # Successful authentication requests
+        - record: voicehive:auth_success:rate5m
+          expr: |
+            sum(rate(voicehive_auth_requests_total[5m])) by (service, method) - 
+            sum(rate(voicehive_auth_failures_total[5m])) by (service, method)
+          labels:
+            sli_type: "security"
+
+        # Total authentication requests
+        - record: voicehive:auth_total:rate5m
+          expr: |
+            sum(rate(voicehive_auth_requests_total[5m])) by (service, method)
+          labels:
+            sli_type: "security"
+
+        # Authentication Success Rate SLI (5m window)
+        - record: voicehive:auth_success_rate:ratio_rate5m
+          expr: |
+            voicehive:auth_success:rate5m / voicehive:auth_total:rate5m
+          labels:
+            sli_type: "security"
+
+    # Error Budget and Burn Rate Calculations
+    - name: voicehive.slo.error_budgets
+      interval: 1m
+      rules:
+        # API Availability Error Budget (99.9% SLO)
+        - record: voicehive:slo_api_availability:error_budget_remaining
+          expr: |
+            1 - (
+              (1 - voicehive:api_availability:ratio_rate30m) / 
+              (1 - 0.999)
+            )
+          labels:
+            slo_name: "api_availability"
+            target: "99.9"
+
+        # API Availability Burn Rate (1h window)
+        - record: voicehive:slo_api_availability:burn_rate_1h
+          expr: |
+            (1 - voicehive:api_availability:ratio_rate1h) / (1 - 0.999)
+          labels:
+            slo_name: "api_availability"
+            window: "1h"
+
+        # API Availability Burn Rate (6h window)
+        - record: voicehive:slo_api_availability:burn_rate_6h
+          expr: |
+            (1 - voicehive:api_availability:ratio_rate6h) / (1 - 0.999)
+          labels:
+            slo_name: "api_availability"
+            window: "6h"
+
+        # API Latency Error Budget (95% SLO)
+        - record: voicehive:slo_api_latency:error_budget_remaining
+          expr: |
+            1 - (
+              (1 - voicehive:api_latency:ratio_rate30m) / 
+              (1 - 0.95)
+            )
+          labels:
+            slo_name: "api_latency_p95"
+            target: "95.0"
+
+        # API Latency Burn Rate (1h window)
+        - record: voicehive:slo_api_latency:burn_rate_1h
+          expr: |
+            (1 - voicehive:api_latency:ratio_rate1h) / (1 - 0.95)
+          labels:
+            slo_name: "api_latency_p95"
+            window: "1h"
+
+        # Call Success Rate Error Budget (99% SLO)
+        - record: voicehive:slo_call_success:error_budget_remaining
+          expr: |
+            1 - (
+              (1 - voicehive:call_success_rate:ratio_rate30m) / 
+              (1 - 0.99)
+            )
+          labels:
+            slo_name: "call_success_rate"
+            target: "99.0"
+
+        # Call Success Rate Burn Rate (1h window)
+        - record: voicehive:slo_call_success:burn_rate_1h
+          expr: |
+            (1 - voicehive:call_success_rate:ratio_rate1h) / (1 - 0.99)
+          labels:
+            slo_name: "call_success_rate"
+            window: "1h"
+
+    # Business Metrics SLI Recording Rules
+    - name: voicehive.sli.business_metrics
+      interval: 60s
+      rules:
+        # Guest Satisfaction Score (daily average)
+        - record: voicehive:guest_satisfaction:avg_24h
+          expr: |
+            sum(rate(voicehive_guest_satisfaction_sum[24h])) by (hotel_id, language) /
+            sum(rate(voicehive_guest_satisfaction_count[24h])) by (hotel_id, language)
+          labels:
+            sli_type: "business"
+            metric: "satisfaction"
+
+        # Guest Satisfaction SLI (percentage of time above 4.0)
+        - record: voicehive:guest_satisfaction:sli_rate1h
+          expr: |
+            (voicehive:guest_satisfaction:avg_24h >= 4.0)
+          labels:
+            sli_type: "business"
+            metric: "satisfaction_sli"
+
+        # Booking Conversion Rate
+        - record: voicehive:booking_conversion:rate1h
+          expr: |
+            sum(rate(voicehive_booking_conversions_total{outcome="success"}[1h])) by (hotel_id) /
+            sum(rate(voicehive_booking_conversions_total[1h])) by (hotel_id)
+          labels:
+            sli_type: "business"
+            metric: "conversion_rate"
+
+    # Infrastructure SLI Recording Rules
+    - name: voicehive.sli.infrastructure
+      interval: 30s
+      rules:
+        # Database Connection Pool Availability
+        - record: voicehive:db_connection_pool:availability_rate5m
+          expr: |
+            (voicehive_connection_pool_active / voicehive_connection_pool_max < 0.95)
+          labels:
+            sli_type: "infrastructure"
+            component: "database"
+
+        # Redis Connection Health
+        - record: voicehive:redis_health:availability_rate5m
+          expr: |
+            voicehive_redis_up
+          labels:
+            sli_type: "infrastructure"
+            component: "redis"
+
+        # Circuit Breaker Health (percentage of time closed)
+        - record: voicehive:circuit_breaker:health_rate5m
+          expr: |
+            (voicehive_circuit_breaker_state{state="closed"} == 1)
+          labels:
+            sli_type: "infrastructure"
+            component: "circuit_breaker"
+
+---
+# SLO Alerting Rules based on Burn Rates
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: voicehive-slo-burn-rate-alerts
+  namespace: voicehive-production
+  labels:
+    app: voicehive-hotels
+    environment: production
+    prometheus: kube-prometheus
+    role: alert-rules
+    type: slo-burn-rate
+spec:
+  groups:
+    # Fast Burn Rate Alerts (1h window)
+    - name: voicehive.slo.burn_rate.fast
+      interval: 30s
+      rules:
+        # API Availability Fast Burn Rate
+        - alert: VoiceHiveAPIAvailabilityFastBurnRate
+          expr: voicehive:slo_api_availability:burn_rate_1h > 14.4
+          for: 2m
+          labels:
+            severity: critical
+            slo_name: api_availability
+            burn_rate_window: 1h
+            team: platform
+          annotations:
+            summary: "API Availability SLO fast burn rate detected"
+            description: "API availability error budget is burning at {{ $value | humanize }}x the normal rate (threshold: 14.4x)"
+            runbook_url: "https://docs.voicehive.com/runbooks/slo-burn-rate/api-availability"
+            dashboard_url: "https://grafana.voicehive.com/d/slo-overview/slo-overview?var-slo=api_availability"
+
+        # API Latency Fast Burn Rate
+        - alert: VoiceHiveAPILatencyFastBurnRate
+          expr: voicehive:slo_api_latency:burn_rate_1h > 7.2
+          for: 2m
+          labels:
+            severity: critical
+            slo_name: api_latency_p95
+            burn_rate_window: 1h
+            team: platform
+          annotations:
+            summary: "API Latency SLO fast burn rate detected"
+            description: "API latency error budget is burning at {{ $value | humanize }}x the normal rate (threshold: 7.2x)"
+            runbook_url: "https://docs.voicehive.com/runbooks/slo-burn-rate/api-latency"
+
+        # Call Success Rate Fast Burn Rate
+        - alert: VoiceHiveCallSuccessFastBurnRate
+          expr: voicehive:slo_call_success:burn_rate_1h > 14.4
+          for: 2m
+          labels:
+            severity: critical
+            slo_name: call_success_rate
+            burn_rate_window: 1h
+            team: voice
+          annotations:
+            summary: "Call Success Rate SLO fast burn rate detected"
+            description: "Call success rate error budget is burning at {{ $value | humanize }}x the normal rate (threshold: 14.4x)"
+            runbook_url: "https://docs.voicehive.com/runbooks/slo-burn-rate/call-success"
+
+    # Medium Burn Rate Alerts (6h window)
+    - name: voicehive.slo.burn_rate.medium
+      interval: 60s
+      rules:
+        # API Availability Medium Burn Rate
+        - alert: VoiceHiveAPIAvailabilityMediumBurnRate
+          expr: voicehive:slo_api_availability:burn_rate_6h > 6.0
+          for: 15m
+          labels:
+            severity: warning
+            slo_name: api_availability
+            burn_rate_window: 6h
+            team: platform
+          annotations:
+            summary: "API Availability SLO medium burn rate detected"
+            description: "API availability error budget is burning at {{ $value | humanize }}x the normal rate over 6h (threshold: 6.0x)"
+            runbook_url: "https://docs.voicehive.com/runbooks/slo-burn-rate/api-availability"
+
+    # Error Budget Exhaustion Alerts
+    - name: voicehive.slo.error_budget_exhaustion
+      interval: 60s
+      rules:
+        # API Availability Error Budget Exhaustion
+        - alert: VoiceHiveAPIAvailabilityErrorBudgetExhaustion
+          expr: voicehive:slo_api_availability:error_budget_remaining < 0.1
+          for: 5m
+          labels:
+            severity: critical
+            slo_name: api_availability
+            alert_type: error_budget_exhaustion
+            team: platform
+          annotations:
+            summary: "API Availability SLO error budget nearly exhausted"
+            description: "API availability error budget remaining: {{ $value | humanizePercentage }} (threshold: 10%)"
+            runbook_url: "https://docs.voicehive.com/runbooks/slo-error-budget-exhaustion/api-availability"
+
+        # Deployment Freeze Recommendation
+        - alert: VoiceHiveDeploymentFreezeRecommended
+          expr: |
+            (voicehive:slo_api_availability:error_budget_remaining < 0.05) or
+            (voicehive:slo_call_success:error_budget_remaining < 0.05)
+          for: 2m
+          labels:
+            severity: warning
+            alert_type: deployment_freeze
+            team: platform
+          annotations:
+            summary: "Deployment freeze recommended due to low error budget"
+            description: "Multiple SLOs have critically low error budgets. Consider freezing deployments."
+            runbook_url: "https://docs.voicehive.com/runbooks/deployment-freeze"

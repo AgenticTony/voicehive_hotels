@@ -1,0 +1,39 @@
+# Staging Environment Deployment Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: staging-deployment-config
+  namespace: voicehive-staging
+data:
+  # Blue-Green Deployment Configuration
+  deployment.strategy: "blue-green"
+  deployment.validation.enabled: "true"
+  deployment.smoke-tests.enabled: "true"
+  deployment.rollback.enabled: "true"
+
+  # Environment-specific settings
+  environment: "staging"
+  log.level: "DEBUG"
+  monitoring.enabled: "true"
+  security.enhanced: "true"
+
+  # Service mesh configuration
+  istio.enabled: "true"
+  traffic.split.enabled: "true"
+
+  # Validation timeouts
+  validation.timeout: "300s"
+  smoke-test.timeout: "180s"
+  rollback.timeout: "120s"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: staging-deployment-secrets
+  namespace: voicehive-staging
+type: Opaque
+stringData:
+  # Deployment automation secrets
+  deployment.webhook.secret: "staging-webhook-secret-placeholder"
+  monitoring.api.key: "staging-monitoring-key-placeholder"
+  rollback.notification.webhook: "staging-rollback-webhook-placeholder"

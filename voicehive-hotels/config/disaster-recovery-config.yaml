@@ -1,0 +1,407 @@
+# Disaster Recovery & Business Continuity Configuration
+# Production-grade DR configuration for VoiceHive Hotels
+
+# RTO (Recovery Time Objective) Targets
+rto_targets:
+  # Critical path components - must be recovered first
+  - component: database
+    target_minutes: 15
+    critical_path: true
+    dependencies: []
+    
+  - component: redis
+    target_minutes: 10
+    critical_path: true
+    dependencies: []
+    
+  - component: kubernetes
+    target_minutes: 20
+    critical_path: false
+    dependencies: [database, redis]
+    
+  - component: application
+    target_minutes: 30
+    critical_path: false
+    dependencies: [database, redis, kubernetes]
+    
+  - component: network
+    target_minutes: 5
+    critical_path: true
+    dependencies: []
+    
+  - component: storage
+    target_minutes: 25
+    critical_path: false
+    dependencies: []
+
+# RPO (Recovery Point Objective) Targets
+rpo_targets:
+  - component: database
+    target_minutes: 5
+    backup_frequency_minutes: 15
+    replication_enabled: true
+    
+  - component: redis
+    target_minutes: 15
+    backup_frequency_minutes: 360  # 6 hours
+    replication_enabled: true
+    
+  - component: storage
+    target_minutes: 60
+    backup_frequency_minutes: 1440  # 24 hours
+    replication_enabled: true
+    
+  - component: kubernetes
+    target_minutes: 30
+    backup_frequency_minutes: 1440  # 24 hours
+    replication_enabled: false
+
+# Cross-Region Configuration
+cross_region:
+  primary_region: ${PRIMARY_REGION:-eu-west-1}
+  dr_region: ${DR_REGION:-eu-central-1}
+  
+  # Failover configuration
+  failover:
+    auto_failover_enabled: ${AUTO_FAILOVER_ENABLED:-false}
+    manual_approval_required: ${MANUAL_APPROVAL_REQUIRED:-true}
+    
+    # Auto-failover triggers
+    triggers:
+      - region_health_score_below: 50
+      - service_availability_below: 95
+      - response_time_above_ms: 5000
+      - error_rate_above_percent: 5
+    
+    # Approval workflow
+    approval:
+      required_approvers: 2
+      approver_roles:
+        - platform_lead
+        - engineering_manager
+        - incident_commander
+      timeout_minutes: 30
+
+# Backup Configuration
+backup:
+  retention_days: ${BACKUP_RETENTION_DAYS:-30}
+  cross_region_replication: ${CROSS_REGION_REPLICATION:-true}
+  
+  # Backup verification
+  verification:
+    enabled: ${BACKUP_VERIFICATION_ENABLED:-true}
+    frequency: daily
+    
+    # Verification types
+    types:
+      - checksum_verification
+      - restore_testing
+      - data_integrity_checks
+      - performance_validation
+    
+    # Restore testing configuration
+    restore_testing:
+      frequency_days: ${RESTORE_TEST_FREQUENCY:-7}
+      test_environments:
+        - staging
+        - dr-test
+      automated_cleanup: true
+      
+  # Backup storage configuration
+  storage:
+    primary:
+      type: s3
+      bucket: ${BACKUP_PRIMARY_BUCKET:-voicehive-backups-primary}
+      encryption: true
+      
+    dr:
+      type: s3
+      bucket: ${BACKUP_DR_BUCKET:-voicehive-backups-dr}
+      encryption: true
+
+# Testing Configuration
+testing:
+  frequency_days: ${DR_TEST_FREQUENCY:-7}
+  automated_testing: ${AUTOMATED_DR_TESTING:-true}
+  
+  # Chaos engineering
+  chaos_engineering:
+    enabled: ${CHAOS_ENGINEERING_ENABLED:-true}
+    tool: chaos_mesh
+    
+    # Chaos experiments
+    experiments:
+      - name: pod_failure_test
+        type: PodChaos
+        schedule: "0 2 * * 1"  # Weekly on Monday at 2 AM
+        target_selector:
+          app: orchestrator
+        action: pod-kill
+        duration: 5m
+        
+      - name: network_partition_test
+        type: NetworkChaos
+        schedule: "0 2 * * 3"  # Weekly on Wednesday at 2 AM
+        target_selector:
+          app: database
+        action: partition
+        duration: 10m
+        
+      - name: disk_io_delay_test
+        type: IOChaos
+        schedule: "0 2 * * 5"  # Weekly on Friday at 2 AM
+        target_selector:
+          app: redis
+        action: delay
+        duration: 15m
+        delay: 100ms
+  
+  # Automated drills
+  drills:
+    - name: database_failover_drill
+      type: database_failover
+      schedule: "0 1 1 * *"  # First day of month at 1 AM
+      duration_minutes: 60
+      automated: true
+      rollback_automatic: true
+      
+    - name: region_failover_drill
+      type: region_failover
+      schedule: "0 1 15 * *"  # 15th of month at 1 AM
+      duration_minutes: 120
+      automated: false
+      approval_required: true
+      
+    - name: backup_restore_drill
+      type: backup_restore
+      schedule: "0 2 * * 0"  # Weekly on Sunday at 2 AM
+      duration_minutes: 30
+      automated: true
+      rollback_automatic: true
+  
+  # Success criteria for tests
+  success_criteria:
+    rto_compliance: true
+    rpo_compliance: true
+    data_integrity: true
+    service_availability: 99.9
+    performance_degradation_max_percent: 20
+
+# Notification Configuration
+notifications:
+  channels:
+    - slack
+    - email
+    - sms
+    - pagerduty
+  
+  # Slack configuration
+  slack:
+    webhook_url: ${SLACK_WEBHOOK_URL}
+    backup_webhook_url: ${SLACK_BACKUP_WEBHOOK_URL}
+    channels:
+      - "#incidents"
+      - "#platform-alerts"
+      - "#executive-alerts"
+  
+  # Email configuration
+  email:
+    smtp_server: ${SMTP_SERVER}
+    backup_smtp_server: ${BACKUP_SMTP_SERVER}
+    recipients:
+      critical:
+        - platform-team@voicehive-hotels.com
+        - executives@voicehive-hotels.com
+      warning:
+        - platform-team@voicehive-hotels.com
+      info:
+        - platform-team@voicehive-hotels.com
+  
+  # SMS configuration
+  sms:
+    provider: twilio
+    backup_provider: aws_sns
+    recipients:
+      - "+1234567890"  # Platform Lead
+      - "+1234567891"  # Engineering Manager
+  
+  # PagerDuty configuration
+  pagerduty:
+    integration_key: ${PAGERDUTY_INTEGRATION_KEY}
+    service_id: ${PAGERDUTY_SERVICE_ID}
+
+# Monitoring Configuration
+monitoring:
+  # Prometheus metrics
+  prometheus:
+    enabled: ${PROMETHEUS_ENABLED:-true}
+    port: ${PROMETHEUS_PORT:-9090}
+    path: ${PROMETHEUS_PATH:-/metrics}
+    
+    # Custom labels
+    labels:
+      service: voicehive-orchestrator
+      component: disaster-recovery
+      environment: ${ENVIRONMENT:-production}
+  
+  # Health checks
+  health_checks:
+    enabled: true
+    port: ${HEALTH_CHECK_PORT:-8080}
+    path: ${HEALTH_CHECK_PATH:-/health/dr}
+    
+    # Check intervals (seconds)
+    intervals:
+      backup_status: 300
+      replication_status: 60
+      failover_readiness: 300
+      compliance_status: 3600
+  
+  # Alerting thresholds
+  alerting:
+    rto_compliance_threshold: 95  # Percent
+    rpo_compliance_threshold: 95  # Percent
+    backup_failure_threshold: 2   # Consecutive failures
+    replication_lag_threshold: 300 # Seconds
+    
+    # Alert severity levels
+    severity_levels:
+      critical:
+        - region_outage
+        - data_corruption
+        - backup_failure_consecutive
+      warning:
+        - rto_violation
+        - rpo_violation
+        - replication_lag
+      info:
+        - test_completion
+        - drill_completion
+
+# Security Configuration
+security:
+  # Encryption
+  encryption:
+    backup_encryption: ${BACKUP_ENCRYPTION_ENABLED:-true}
+    transit_encryption: ${TRANSIT_ENCRYPTION_ENABLED:-true}
+    key_rotation_days: ${KEY_ROTATION_DAYS:-90}
+  
+  # Access control
+  access_control:
+    rbac_enabled: true
+    
+    # Role definitions
+    roles:
+      dr_admin:
+        permissions:
+          - execute_failover
+          - approve_recovery
+          - manage_backups
+          - view_all_metrics
+      
+      dr_operator:
+        permissions:
+          - view_status
+          - execute_tests
+          - view_metrics
+      
+      dr_viewer:
+        permissions:
+          - view_status
+          - view_metrics
+  
+  # Audit logging
+  audit:
+    enabled: ${AUDIT_LOGGING_ENABLED:-true}
+    retention_days: ${AUDIT_RETENTION_DAYS:-365}
+    
+    # Events to audit
+    events:
+      - failover_execution
+      - recovery_operations
+      - backup_operations
+      - test_execution
+      - configuration_changes
+      - access_events
+
+# Compliance Configuration
+compliance:
+  # Regulatory requirements
+  regulations:
+    - gdpr
+    - iso27001
+    - soc2
+  
+  # Compliance reporting
+  reporting:
+    enabled: true
+    frequency: monthly
+    
+    # Report types
+    types:
+      - rto_rpo_compliance
+      - backup_verification
+      - test_results
+      - security_audit
+  
+  # Evidence collection
+  evidence_collection:
+    enabled: true
+    retention_years: 7
+    
+    # Evidence types
+    types:
+      - test_logs
+      - backup_logs
+      - recovery_logs
+      - audit_trails
+      - compliance_reports
+
+# Environment-specific overrides
+environments:
+  development:
+    rto_targets:
+      - component: database
+        target_minutes: 60
+      - component: application
+        target_minutes: 120
+    
+    testing:
+      frequency_days: 1
+      chaos_engineering:
+        enabled: false
+    
+    backup:
+      retention_days: 7
+  
+  staging:
+    rto_targets:
+      - component: database
+        target_minutes: 30
+      - component: application
+        target_minutes: 60
+    
+    testing:
+      frequency_days: 3
+      chaos_engineering:
+        enabled: true
+    
+    backup:
+      retention_days: 14
+  
+  production:
+    # Use default values from above
+    testing:
+      frequency_days: 7
+      chaos_engineering:
+        enabled: true
+    
+    backup:
+      retention_days: 30
+      verification:
+        restore_testing:
+          frequency_days: 7
+
+</content>
+</file>
+</invoke>

@@ -9,14 +9,19 @@ resources:
   - deployment-livekit-agent.yaml
   - deployment-riva-asr-proxy.yaml
   - deployment-tts-router.yaml
-  
+
   # Configuration
   - configmap-gdpr.yaml
   - externalsecrets.yaml
-  
+
   # Networking
   - ingress.yaml
-  
+
+  # Security
+  - ../security/network-policies.yaml
+  - ../security/network-segmentation.yaml
+  - ../security/pod-security-standards.yaml
+
   # Resource Management
   - resourcequota.yaml
   - poddisruptionbudgets.yaml
@@ -60,7 +65,7 @@ patchesStrategicMerge:
 images:
   - name: voicehive/orchestrator
     newTag: latest
-  - name: voicehive/livekit-agent  
+  - name: voicehive/livekit-agent
     newTag: latest
   - name: voicehive/riva-asr-proxy
     newTag: latest
@@ -88,5 +93,4 @@ secretGenerator:
     options:
       annotations:
         note: "DO NOT USE IN PRODUCTION - Use ExternalSecrets instead"
-
 # Resource quotas and Pod Disruption Budgets will be created as separate files

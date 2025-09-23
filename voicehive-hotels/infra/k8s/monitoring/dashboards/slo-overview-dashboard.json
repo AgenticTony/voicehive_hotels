@@ -1,0 +1,446 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "VoiceHive SLO Overview",
+    "tags": ["voicehive", "slo", "sli", "error-budget"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "slo",
+          "type": "query",
+          "query": "label_values(voicehive:api_availability:ratio_rate5m, slo_name)",
+          "current": {"value": "All"},
+          "options": [],
+          "refresh": 1,
+          "multi": true,
+          "includeAll": true
+        },
+        {
+          "name": "service",
+          "type": "query",
+          "query": "label_values(voicehive:api_availability:ratio_rate5m, service)",
+          "current": {"value": "All"},
+          "options": [],
+          "refresh": 1,
+          "multi": true,
+          "includeAll": true
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "SLO Compliance Summary",
+        "type": "stat",
+        "gridPos": {"h": 6, "w": 24, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "count(voicehive:api_availability:ratio_rate5m >= 0.999)",
+            "legendFormat": "Compliant SLOs",
+            "refId": "A"
+          },
+          {
+            "expr": "count(voicehive:api_availability:ratio_rate5m < 0.999 and voicehive:api_availability:ratio_rate5m >= 0.99)",
+            "legendFormat": "At Risk SLOs",
+            "refId": "B"
+          },
+          {
+            "expr": "count(voicehive:api_availability:ratio_rate5m < 0.99)",
+            "legendFormat": "Violated SLOs",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 1},
+                {"color": "green", "value": 2}
+              ]
+            },
+            "unit": "short"
+          },
+          "overrides": [
+            {
+              "matcher": {"id": "byName", "options": "Compliant SLOs"},
+              "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]
+            },
+            {
+              "matcher": {"id": "byName", "options": "At Risk SLOs"},
+              "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "yellow"}}]
+            },
+            {
+              "matcher": {"id": "byName", "options": "Violated SLOs"},
+              "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]
+            }
+          ]
+        }
+      },
+      {
+        "id": 2,
+        "title": "API Availability SLI",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+        "targets": [
+          {
+            "expr": "voicehive:api_availability:ratio_rate5m * 100",
+            "legendFormat": "Current SLI",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {"label": "Availability %", "min": 99, "max": 100},
+          {"show": false}
+        ],
+        "thresholds": [
+          {"value": 99.9, "colorMode": "critical", "op": "lt", "fill": true, "line": true}
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {"params": [99.9], "type": "lt"},
+              "operator": {"type": "and"},
+              "query": {"params": ["A", "5m", "now"]},
+              "reducer": {"params": [], "type": "avg"},
+              "type": "query"
+            }
+          ],
+          "executionErrorState": "alerting",
+          "for": "2m",
+          "frequency": "30s",
+          "handler": 1,
+          "name": "API Availability SLO Violation",
+          "noDataState": "no_data"
+        }
+      },
+      {
+        "id": 3,
+        "title": "API Availability Error Budget",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+        "targets": [
+          {
+            "expr": "voicehive:slo_api_availability:error_budget_remaining * 100",
+            "legendFormat": "Error Budget Remaining %",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {"label": "Error Budget %", "min": 0, "max": 100},
+          {"show": false}
+        ],
+        "thresholds": [
+          {"value": 10, "colorMode": "critical", "op": "lt", "fill": true, "line": true},
+          {"value": 25, "colorMode": "warning", "op": "lt", "fill": false, "line": true}
+        ]
+      },
+      {
+        "id": 4,
+        "title": "API Latency SLI (95th percentile < 2s)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+        "targets": [
+          {
+            "expr": "voicehive:api_latency:ratio_rate5m * 100",
+            "legendFormat": "Latency SLI %",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {"label": "Percentage", "min": 90, "max": 100},
+          {"show": false}
+        ],
+        "thresholds": [
+          {"value": 95, "colorMode": "critical", "op": "lt", "fill": true, "line": true}
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Call Success Rate SLI",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+        "targets": [
+          {
+            "expr": "voicehive:call_success_rate:ratio_rate5m * 100",
+            "legendFormat": "Call Success Rate %",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {"label": "Success Rate %", "min": 95, "max": 100},
+          {"show": false}
+        ],
+        "thresholds": [
+          {"value": 99, "colorMode": "critical", "op": "lt", "fill": true, "line": true}
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Burn Rate Analysis - API Availability",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 22},
+        "targets": [
+          {
+            "expr": "voicehive:slo_api_availability:burn_rate_1h",
+            "legendFormat": "1h Burn Rate",
+            "refId": "A"
+          },
+          {
+            "expr": "voicehive:slo_api_availability:burn_rate_6h",
+            "legendFormat": "6h Burn Rate",
+            "refId": "B"
+          }
+        ],
+        "yAxes": [
+          {"label": "Burn Rate Multiplier", "min": 0},
+          {"show": false}
+        ],
+        "thresholds": [
+          {"value": 14.4, "colorMode": "critical", "op": "gt", "fill": false, "line": true},
+          {"value": 6.0, "colorMode": "warning", "op": "gt", "fill": false, "line": true}
+        ]
+      },
+      {
+        "id": 7,
+        "title": "PMS Connector Availability",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 30},
+        "targets": [
+          {
+            "expr": "voicehive:pms_availability:ratio_rate5m * 100",
+            "legendFormat": "PMS Availability %",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 95},
+                {"color": "green", "value": 98}
+              ]
+            },
+            "unit": "percent"
+          }
+        }
+      },
+      {
+        "id": 8,
+        "title": "PMS Response Time SLI",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 30},
+        "targets": [
+          {
+            "expr": "voicehive:pms_latency:ratio_rate5m * 100",
+            "legendFormat": "< 5s Response %",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 85},
+                {"color": "green", "value": 90}
+              ]
+            },
+            "unit": "percent"
+          }
+        }
+      },
+      {
+        "id": 9,
+        "title": "Authentication Success Rate",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 30},
+        "targets": [
+          {
+            "expr": "voicehive:auth_success_rate:ratio_rate5m * 100",
+            "legendFormat": "Auth Success %",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 99},
+                {"color": "green", "value": 99.5}
+              ]
+            },
+            "unit": "percent"
+          }
+        }
+      },
+      {
+        "id": 10,
+        "title": "Database Connection Pool Health",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 30},
+        "targets": [
+          {
+            "expr": "voicehive:db_connection_pool:availability_rate5m * 100",
+            "legendFormat": "DB Pool Health %",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 90},
+                {"color": "green", "value": 95}
+              ]
+            },
+            "unit": "percent"
+          }
+        }
+      },
+      {
+        "id": 11,
+        "title": "Business Metrics - Guest Satisfaction",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 34},
+        "targets": [
+          {
+            "expr": "voicehive:guest_satisfaction:avg_24h",
+            "legendFormat": "Avg Satisfaction Score",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {"label": "Score (1-5)", "min": 1, "max": 5},
+          {"show": false}
+        ],
+        "thresholds": [
+          {"value": 4.0, "colorMode": "critical", "op": "lt", "fill": true, "line": true}
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Business Metrics - Booking Conversion Rate",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34},
+        "targets": [
+          {
+            "expr": "voicehive:booking_conversion:rate1h * 100",
+            "legendFormat": "Conversion Rate %",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {"label": "Conversion %", "min": 0, "max": 30},
+          {"show": false}
+        ],
+        "thresholds": [
+          {"value": 15, "colorMode": "critical", "op": "lt", "fill": true, "line": true}
+        ]
+      },
+      {
+        "id": 13,
+        "title": "SLO Violation History (24h)",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 42},
+        "targets": [
+          {
+            "expr": "changes(ALERTS{alertname=~\".*SLO.*\"}[24h])",
+            "legendFormat": "{{alertname}} - {{service}}",
+            "refId": "A",
+            "format": "table"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {},
+              "indexByName": {},
+              "renameByName": {
+                "alertname": "Alert Name",
+                "service": "Service",
+                "Value": "Violations (24h)"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "title": "Error Budget Burn Rate Heatmap",
+        "type": "heatmap",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 50},
+        "targets": [
+          {
+            "expr": "voicehive:slo_api_availability:burn_rate_1h",
+            "legendFormat": "API Availability",
+            "refId": "A"
+          },
+          {
+            "expr": "voicehive:slo_api_latency:burn_rate_1h",
+            "legendFormat": "API Latency",
+            "refId": "B"
+          },
+          {
+            "expr": "voicehive:slo_call_success:burn_rate_1h",
+            "legendFormat": "Call Success",
+            "refId": "C"
+          }
+        ],
+        "heatmap": {
+          "xBucketSize": "1h",
+          "yBucketSize": 1,
+          "yAxis": {
+            "min": 0,
+            "max": 20,
+            "unit": "short"
+          }
+        }
+      }
+    ],
+    "annotations": {
+      "list": [
+        {
+          "name": "SLO Violations",
+          "datasource": "Prometheus",
+          "expr": "ALERTS{alertname=~\".*SLO.*\", alertstate=\"firing\"}",
+          "titleFormat": "SLO Alert: {{alertname}}",
+          "textFormat": "{{service}}: {{description}}",
+          "iconColor": "red"
+        },
+        {
+          "name": "Deployments",
+          "datasource": "Prometheus",
+          "expr": "changes(voicehive_build_info[1h])",
+          "titleFormat": "Deployment",
+          "textFormat": "Version: {{version}}",
+          "iconColor": "blue"
+        },
+        {
+          "name": "Error Budget Exhaustion",
+          "datasource": "Prometheus",
+          "expr": "ALERTS{alertname=~\".*ErrorBudget.*\", alertstate=\"firing\"}",
+          "titleFormat": "Error Budget Alert",
+          "textFormat": "{{slo_name}}: {{description}}",
+          "iconColor": "orange"
+        }
+      ]
+    }
+  }
+}

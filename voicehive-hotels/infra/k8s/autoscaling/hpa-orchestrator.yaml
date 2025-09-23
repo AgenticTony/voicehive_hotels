@@ -1,0 +1,332 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: voicehive-orchestrator-hpa
+  namespace: voicehive
+  labels:
+    app: voicehive-orchestrator
+    component: autoscaling
+    environment: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: voicehive-orchestrator
+
+  minReplicas: 3
+  maxReplicas: 20
+
+  # Scaling behavior configuration
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300 # 5 minutes
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 60 # 1 minute
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+        - type: Pods
+          value: 4
+          periodSeconds: 30
+      selectPolicy: Max
+
+  # Metrics for scaling decisions
+  metrics:
+    # CPU utilization
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    # Memory utilization
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+    # Custom metric: Active requests per pod
+    - type: Pods
+      pods:
+        metric:
+          name: voicehive_active_requests_per_pod
+        target:
+          type: AverageValue
+          averageValue: "50"
+
+    # Custom metric: Request queue depth
+    - type: Object
+      object:
+        metric:
+          name: voicehive_request_queue_depth
+        target:
+          type: Value
+          value: "100"
+        describedObject:
+          apiVersion: v1
+          kind: Service
+          name: voicehive-orchestrator
+
+    # Custom metric: Response time P95
+    - type: Pods
+      pods:
+        metric:
+          name: voicehive_response_time_p95_seconds
+        target:
+          type: AverageValue
+          averageValue: "2"
+
+    # Custom metric: Error rate
+    - type: Pods
+      pods:
+        metric:
+          name: voicehive_error_rate_percent
+        target:
+          type: AverageValue
+          averageValue: "5"
+
+    # External metric: Redis connection pool utilization
+    - type: External
+      external:
+        metric:
+          name: redis_connection_pool_utilization
+          selector:
+            matchLabels:
+              service: voicehive-orchestrator
+        target:
+          type: Value
+          value: "80"
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: voicehive-livekit-agent-hpa
+  namespace: voicehive
+  labels:
+    app: voicehive-livekit-agent
+    component: autoscaling
+    environment: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: voicehive-livekit-agent
+
+  minReplicas: 2
+  maxReplicas: 15
+
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 180 # 3 minutes
+      policies:
+        - type: Percent
+          value: 30
+          periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 30 # 30 seconds
+      policies:
+        - type: Percent
+          value: 200
+          periodSeconds: 30
+        - type: Pods
+          value: 3
+          periodSeconds: 30
+      selectPolicy: Max
+
+  metrics:
+    # CPU utilization (media processing is CPU intensive)
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+
+    # Memory utilization (audio buffers)
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+
+    # Custom metric: Active call sessions per pod
+    - type: Pods
+      pods:
+        metric:
+          name: voicehive_active_call_sessions_per_pod
+        target:
+          type: AverageValue
+          averageValue: "10"
+
+    # Custom metric: Audio processing queue depth
+    - type: Pods
+      pods:
+        metric:
+          name: voicehive_audio_processing_queue_depth
+        target:
+          type: AverageValue
+          averageValue: "20"
+
+    # Custom metric: WebRTC connection count
+    - type: Pods
+      pods:
+        metric:
+          name: voicehive_webrtc_connections_per_pod
+        target:
+          type: AverageValue
+          averageValue: "15"
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: voicehive-tts-router-hpa
+  namespace: voicehive
+  labels:
+    app: voicehive-tts-router
+    component: autoscaling
+    environment: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: voicehive-tts-router
+
+  minReplicas: 2
+  maxReplicas: 10
+
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 240 # 4 minutes
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 45 # 45 seconds
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+      selectPolicy: Max
+
+  metrics:
+    # CPU utilization
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65
+
+    # Memory utilization
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    # Custom metric: TTS requests per second per pod
+    - type: Pods
+      pods:
+        metric:
+          name: voicehive_tts_requests_per_second_per_pod
+        target:
+          type: AverageValue
+          averageValue: "25"
+
+    # Custom metric: TTS processing latency
+    - type: Pods
+      pods:
+        metric:
+          name: voicehive_tts_processing_latency_seconds
+        target:
+          type: AverageValue
+          averageValue: "1.5"
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: voicehive-riva-asr-proxy-hpa
+  namespace: voicehive
+  labels:
+    app: voicehive-riva-asr-proxy
+    component: autoscaling
+    environment: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: voicehive-riva-asr-proxy
+
+  minReplicas: 2
+  maxReplicas: 8
+
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300 # 5 minutes
+      policies:
+        - type: Percent
+          value: 20
+          periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 60 # 1 minute
+      policies:
+        - type: Percent
+          value: 150
+          periodSeconds: 30
+      selectPolicy: Max
+
+  metrics:
+    # CPU utilization
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    # Memory utilization
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+
+    # Custom metric: ASR streaming connections per pod
+    - type: Pods
+      pods:
+        metric:
+          name: voicehive_asr_streaming_connections_per_pod
+        target:
+          type: AverageValue
+          averageValue: "20"
+
+    # Custom metric: ASR processing queue depth
+    - type: Pods
+      pods:
+        metric:
+          name: voicehive_asr_processing_queue_depth
+        target:
+          type: AverageValue
+          averageValue: "30"

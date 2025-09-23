@@ -29,12 +29,49 @@ repos:
         args: [-ll, -r, services/, connectors/]
         exclude: tests/
 
+  # Dependency vulnerability scanning
+  - repo: https://github.com/pyupio/safety
+    rev: 3.0.1
+    hooks:
+      - id: safety
+        args: [--short-report, --ignore=70612] # Ignore specific non-critical issues if needed
+        files: requirements.*\.txt$
+
+  # Alternative dependency scanner
+  - repo: https://github.com/pypa/pip-audit
+    rev: v2.6.1
+    hooks:
+      - id: pip-audit
+        args: [--desc, --format=text]
+        files: requirements.*\.txt$
+
   # Secrets detection
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.4.0
     hooks:
       - id: detect-secrets
-        args: ['--baseline', '.secrets.baseline']
+        args: ["--baseline", ".secrets.baseline"]
+
+  # License compliance check (custom hook)
+  - repo: local
+    hooks:
+      - id: license-check
+        name: License Compliance Check
+        entry: python scripts/security/check-license-compliance.py
+        language: python
+        args:
+          [
+            --config,
+            config/security/dependency-security-config.yaml,
+            --reports,
+            license-report-*.json,
+            --fail-on-forbidden,
+          ]
+        files: requirements.*\.txt$
+        pass_filenames: false
+        additional_dependencies:
+          - pyyaml>=6.0.1
+          - requests>=2.31.0
 
   # YAML formatting
   - repo: https://github.com/pre-commit/mirrors-prettier
@@ -72,7 +109,7 @@ repos:
       - id: check-merge-conflict
       - id: detect-private-key
       - id: check-added-large-files
-        args: ['--maxkb=1000']
+        args: ["--maxkb=1000"]
       - id: no-commit-to-branch
         args: [--branch, main, --branch, production]
 
@@ -82,7 +119,7 @@ repos:
     hooks:
       - id: mypy
         args: [--strict, --ignore-missing-imports]
-        additional_dependencies: 
+        additional_dependencies:
           - types-redis
           - types-requests
           - types-pyyaml
@@ -119,11 +156,11 @@ exclude: |
 ci:
   autofix_commit_msg: |
     [pre-commit.ci] auto fixes from pre-commit.com hooks
-    
+
     for more information, see https://pre-commit.ci
   autofix_prs: true
-  autoupdate_branch: ''
-  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_branch: ""
+  autoupdate_commit_msg: "[pre-commit.ci] pre-commit autoupdate"
   autoupdate_schedule: weekly
   skip: []
   submodules: false

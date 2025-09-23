@@ -1,0 +1,425 @@
+# Network Segmentation and Micro-segmentation Policies
+# Implements zero-trust network architecture with fine-grained access controls
+
+---
+# Namespace Network Isolation Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: namespace-isolation
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: namespace-isolation
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only allow traffic from same namespace by default
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: voicehive
+    # Allow specific cross-namespace traffic
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: istio-system
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow same namespace communication
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: voicehive
+
+---
+# Core Services Micro-segmentation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: core-services-segmentation
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: micro-segmentation
+spec:
+  podSelector:
+    matchLabels:
+      tier: core
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              name: istio-system
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+    # Allow media services
+    - from:
+        - podSelector:
+            matchLabels:
+              tier: media
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow external services (databases, APIs)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 8200
+    # Allow media services
+    - to:
+        - podSelector:
+            matchLabels:
+              tier: media
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+
+---
+# Media Services Micro-segmentation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: media-services-segmentation
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: micro-segmentation
+spec:
+  podSelector:
+    matchLabels:
+      tier: media
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow core services
+    - from:
+        - podSelector:
+            matchLabels:
+              tier: core
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+    # Allow monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+  egress:
+    # Allow external media services
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 7881 # LiveKit WebRTC
+        - protocol: TCP
+          port: 50051 # gRPC for Riva
+    # Allow core services
+    - to:
+        - podSelector:
+            matchLabels:
+              tier: core
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# Database Access Segmentation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: database-access-segmentation
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: database-segmentation
+spec:
+  podSelector:
+    matchLabels:
+      database-access: "allowed"
+  policyTypes:
+    - Egress
+  egress:
+    # Allow PostgreSQL connections
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow Redis connections
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# External API Access Segmentation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: external-api-segmentation
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: external-api-segmentation
+spec:
+  podSelector:
+    matchLabels:
+      external-api-access: "allowed"
+  policyTypes:
+    - Egress
+  egress:
+    # Allow HTTPS for external APIs
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow specific external services
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 7881 # LiveKit WebRTC
+        - protocol: TCP
+          port: 50051 # gRPC services
+
+---
+# Secrets Management Access Segmentation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: secrets-access-segmentation
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: secrets-segmentation
+spec:
+  podSelector:
+    matchLabels:
+      vault-access: "allowed"
+  policyTypes:
+    - Egress
+  egress:
+    # Allow Vault connections
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 8200
+
+---
+# Development Environment Segmentation (Disabled in Production)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: development-segmentation
+  namespace: voicehive-dev
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: development
+    security.voicehive.io/environment: development
+    security.voicehive.io/enabled: "false"
+  annotations:
+    security.voicehive.io/description: "Relaxed policies for development - NEVER enable in production"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow broader access for development
+    - from:
+        - namespaceSelector: {}
+  egress:
+    # Allow broader egress for development
+    - to: []
+
+---
+# Staging Environment Segmentation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: staging-segmentation
+  namespace: voicehive-staging
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: staging
+    security.voicehive.io/environment: staging
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow same namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: voicehive-staging
+    # Allow monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+    # Allow ingress
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow external services (staging databases, APIs)
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 8200
+
+---
+# Cross-Cluster Communication Policy (for multi-cluster setups)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cross-cluster-communication
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: cross-cluster
+    security.voicehive.io/enabled: "false"
+  annotations:
+    security.voicehive.io/description: "Enable for multi-cluster deployments"
+spec:
+  podSelector:
+    matchLabels:
+      cross-cluster-access: "allowed"
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow cross-cluster service mesh traffic
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 15443 # Istio cross-cluster
+  egress:
+    # Allow cross-cluster service mesh traffic
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 15443 # Istio cross-cluster
+
+---
+# Compliance and Audit Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: compliance-audit-segmentation
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: compliance
+spec:
+  podSelector:
+    matchLabels:
+      compliance-logging: "required"
+  policyTypes:
+    - Egress
+  egress:
+    # Allow audit log shipping
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443 # HTTPS for log shipping
+        - protocol: TCP
+          port: 514 # Syslog
+        - protocol: TCP
+          port: 6514 # Secure syslog

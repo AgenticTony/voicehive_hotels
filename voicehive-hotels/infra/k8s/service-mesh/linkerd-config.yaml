@@ -1,0 +1,443 @@
+# Linkerd Service Mesh Configuration for Zero-Trust mTLS
+# Alternative to Istio - Lightweight and production-ready service mesh
+
+---
+# Linkerd Control Plane Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: linkerd-config
+  namespace: linkerd
+  labels:
+    linkerd.io/control-plane-component: controller
+    config.linkerd.io/global: true
+data:
+  global: |
+    {
+      "linkerdNamespace": "linkerd",
+      "cniEnabled": false,
+      "version": "stable-2.14.1",
+      "identityContext": {
+        "trustDomain": "cluster.local",
+        "trustAnchorsPem": "",
+        "issuanceLifetime": "24h0m0s",
+        "clockSkewAllowance": "20s"
+      },
+      "autoInjectContext": null,
+      "omitWebhookSideEffects": false,
+      "clusterDomain": "cluster.local",
+      "clusterNetworks": "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+      "proxy": {
+        "proxyImage": {
+          "imageName": "cr.l5d.io/linkerd/proxy",
+          "pullPolicy": "IfNotPresent"
+        },
+        "proxyInitImage": {
+          "imageName": "cr.l5d.io/linkerd/proxy-init",
+          "pullPolicy": "IfNotPresent"
+        },
+        "controlPort": 4190,
+        "ignoreInboundPorts": "",
+        "ignoreOutboundPorts": "",
+        "inboundPort": 4143,
+        "adminPort": 4191,
+        "outboundPort": 4140,
+        "resource": {
+          "requestCpu": "100m",
+          "requestMemory": "20Mi",
+          "limitCpu": "1",
+          "limitMemory": "250Mi"
+        },
+        "proxyUid": 2102,
+        "logLevel": "warn,linkerd=info",
+        "disableExternalProfiles": true,
+        "proxyVersion": "stable-2.14.1",
+        "proxyInitImageVersion": "v2.0.0",
+        "await": true,
+        "enableExternalProfile": false
+      }
+    }
+  proxy: |
+    {
+      "proxyImage": {
+        "imageName": "cr.l5d.io/linkerd/proxy",
+        "pullPolicy": "IfNotPresent"
+      },
+      "proxyInitImage": {
+        "imageName": "cr.l5d.io/linkerd/proxy-init", 
+        "pullPolicy": "IfNotPresent"
+      },
+      "controlPort": 4190,
+      "ignoreInboundPorts": "",
+      "ignoreOutboundPorts": "",
+      "inboundPort": 4143,
+      "adminPort": 4191,
+      "outboundPort": 4140,
+      "resource": {
+        "requestCpu": "100m",
+        "requestMemory": "20Mi",
+        "limitCpu": "1",
+        "limitMemory": "250Mi"
+      },
+      "proxyUid": 2102,
+      "logLevel": "warn,linkerd=info",
+      "disableExternalProfiles": true,
+      "proxyVersion": "stable-2.14.1",
+      "proxyInitImageVersion": "v2.0.0",
+      "await": true,
+      "enableExternalProfile": false
+    }
+  install: |
+    {
+      "uuid": "voicehive-linkerd-uuid",
+      "cliVersion": "stable-2.14.1",
+      "flags": []
+    }
+
+---
+# Server Authorization Policy for Orchestrator
+apiVersion: policy.linkerd.io/v1beta1
+kind: Server
+metadata:
+  name: orchestrator-server
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: orchestrator
+spec:
+  podSelector:
+    matchLabels:
+      app: orchestrator
+  port: 8080
+  proxyProtocol: "HTTP/2"
+
+---
+# Server Authorization Policy for LiveKit Agent
+apiVersion: policy.linkerd.io/v1beta1
+kind: Server
+metadata:
+  name: livekit-agent-server
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: livekit-agent
+spec:
+  podSelector:
+    matchLabels:
+      app: livekit-agent
+  port: 9090
+  proxyProtocol: "HTTP/2"
+
+---
+# Server Authorization Policy for TTS Router
+apiVersion: policy.linkerd.io/v1beta1
+kind: Server
+metadata:
+  name: tts-router-server
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: tts-router
+spec:
+  podSelector:
+    matchLabels:
+      app: tts-router
+  port: 8080
+  proxyProtocol: "HTTP/2"
+
+---
+# Server Authorization Policy for Riva ASR Proxy
+apiVersion: policy.linkerd.io/v1beta1
+kind: Server
+metadata:
+  name: riva-asr-proxy-server
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: riva-asr-proxy
+spec:
+  podSelector:
+    matchLabels:
+      app: riva-asr-proxy
+  port: 8080
+  proxyProtocol: "HTTP/2"
+
+---
+# Authorization Policy for Orchestrator Access
+apiVersion: policy.linkerd.io/v1beta1
+kind: ServerAuthorization
+metadata:
+  name: orchestrator-authz
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: orchestrator
+spec:
+  server:
+    name: orchestrator-server
+  requiredRoutes:
+    - pathRegex: "/api/.*"
+      methods: ["GET", "POST", "PUT", "DELETE"]
+    - pathRegex: "/webhook/.*"
+      methods: ["POST"]
+    - pathRegex: "/healthz"
+      methods: ["GET"]
+    - pathRegex: "/metrics"
+      methods: ["GET"]
+  client:
+    meshTLS:
+      serviceAccounts:
+        - name: voicehive-livekit-agent
+        - name: voicehive-tts-router
+        - name: voicehive-riva-asr-proxy
+        # Allow ingress controller
+        - name: nginx-ingress-serviceaccount
+          namespace: ingress-nginx
+        # Allow monitoring
+        - name: prometheus
+          namespace: monitoring
+
+---
+# Authorization Policy for LiveKit Agent Access
+apiVersion: policy.linkerd.io/v1beta1
+kind: ServerAuthorization
+metadata:
+  name: livekit-agent-authz
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: livekit-agent
+spec:
+  server:
+    name: livekit-agent-server
+  requiredRoutes:
+    - pathRegex: "/.*"
+      methods: ["GET", "POST"]
+  client:
+    meshTLS:
+      serviceAccounts:
+        - name: voicehive-orchestrator
+        # Allow monitoring
+        - name: prometheus
+          namespace: monitoring
+
+---
+# Authorization Policy for TTS Router Access
+apiVersion: policy.linkerd.io/v1beta1
+kind: ServerAuthorization
+metadata:
+  name: tts-router-authz
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: tts-router
+spec:
+  server:
+    name: tts-router-server
+  requiredRoutes:
+    - pathRegex: "/api/.*"
+      methods: ["GET", "POST"]
+    - pathRegex: "/tts/.*"
+      methods: ["POST"]
+  client:
+    meshTLS:
+      serviceAccounts:
+        - name: voicehive-orchestrator
+        - name: voicehive-livekit-agent
+        # Allow monitoring
+        - name: prometheus
+          namespace: monitoring
+
+---
+# Authorization Policy for Riva ASR Proxy Access
+apiVersion: policy.linkerd.io/v1beta1
+kind: ServerAuthorization
+metadata:
+  name: riva-asr-proxy-authz
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: riva-asr-proxy
+spec:
+  server:
+    name: riva-asr-proxy-server
+  requiredRoutes:
+    - pathRegex: "/api/.*"
+      methods: ["GET", "POST"]
+    - pathRegex: "/asr/.*"
+      methods: ["POST"]
+  client:
+    meshTLS:
+      serviceAccounts:
+        - name: voicehive-orchestrator
+        - name: voicehive-livekit-agent
+        # Allow monitoring
+        - name: prometheus
+          namespace: monitoring
+
+---
+# Traffic Policy for Circuit Breaking and Load Balancing
+apiVersion: policy.linkerd.io/v1alpha1
+kind: HTTPRoute
+metadata:
+  name: orchestrator-route
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: orchestrator
+spec:
+  parentRefs:
+    - name: orchestrator-server
+      kind: Server
+      group: policy.linkerd.io
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: "/api/"
+        - path:
+            type: PathPrefix
+            value: "/webhook/"
+        - path:
+            type: Exact
+            value: "/healthz"
+        - path:
+            type: Exact
+            value: "/metrics"
+      timeouts:
+        request: "30s"
+      backendRefs:
+        - name: orchestrator
+          port: 80
+
+---
+# Network Policy for Linkerd Control Plane
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: linkerd-control-plane
+  namespace: linkerd
+  labels:
+    app.kubernetes.io/name: linkerd
+    app.kubernetes.io/component: control-plane
+spec:
+  podSelector:
+    matchLabels:
+      linkerd.io/control-plane-component: controller
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow proxy connections
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              linkerd.io/proxy-deployment: ""
+      ports:
+        - protocol: TCP
+          port: 8086 # destination controller
+        - protocol: TCP
+          port: 8090 # admin server
+    # Allow webhook connections
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: TCP
+          port: 9443 # webhook server
+  egress:
+    # Allow Kubernetes API access
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+
+---
+# Service Profile for Orchestrator (Performance Optimization)
+apiVersion: linkerd.io/v1alpha2
+kind: ServiceProfile
+metadata:
+  name: orchestrator.voicehive.svc.cluster.local
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: orchestrator
+spec:
+  routes:
+    - name: api_calls
+      condition:
+        method: GET
+        pathRegex: "/api/.*"
+      responseClasses:
+        - condition:
+            status:
+              min: 200
+              max: 299
+          isFailure: false
+        - condition:
+            status:
+              min: 500
+              max: 599
+          isFailure: true
+      timeout: 30s
+      retryBudget:
+        retryRatio: 0.2
+        minRetriesPerSecond: 10
+        ttl: 10s
+    - name: webhooks
+      condition:
+        method: POST
+        pathRegex: "/webhook/.*"
+      responseClasses:
+        - condition:
+            status:
+              min: 200
+              max: 299
+          isFailure: false
+        - condition:
+            status:
+              min: 500
+              max: 599
+          isFailure: true
+      timeout: 60s
+      retryBudget:
+        retryRatio: 0.1
+        minRetriesPerSecond: 5
+        ttl: 10s
+
+---
+# Service Profile for TTS Router
+apiVersion: linkerd.io/v1alpha2
+kind: ServiceProfile
+metadata:
+  name: tts-router.voicehive.svc.cluster.local
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: tts-router
+spec:
+  routes:
+    - name: tts_synthesis
+      condition:
+        method: POST
+        pathRegex: "/tts/.*"
+      responseClasses:
+        - condition:
+            status:
+              min: 200
+              max: 299
+          isFailure: false
+        - condition:
+            status:
+              min: 500
+              max: 599
+          isFailure: true
+      timeout: 45s
+      retryBudget:
+        retryRatio: 0.1
+        minRetriesPerSecond: 3
+        ttl: 10s

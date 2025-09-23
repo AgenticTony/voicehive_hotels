@@ -1,0 +1,331 @@
+# Production Alerting Rules for VoiceHive Hotels
+# Comprehensive alerting configuration for production monitoring
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: voicehive-production-alerts
+  namespace: voicehive-production
+  labels:
+    app: voicehive-hotels
+    environment: production
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    # Application Health Alerts
+    - name: voicehive.application.health
+      interval: 30s
+      rules:
+        - alert: VoiceHiveServiceDown
+          expr: up{job="voicehive-orchestrator"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            service: orchestrator
+          annotations:
+            summary: "VoiceHive service is down"
+            description: "VoiceHive orchestrator service has been down for more than 1 minute"
+            runbook_url: "https://docs.voicehive.com/runbooks/service-down"
+
+        - alert: VoiceHiveHighErrorRate
+          expr: rate(voicehive_requests_total{status=~"5.."}[5m]) / rate(voicehive_requests_total[5m]) > 0.05
+          for: 2m
+          labels:
+            severity: critical
+            service: orchestrator
+          annotations:
+            summary: "High error rate detected"
+            description: "Error rate is {{ $value | humanizePercentage }} for the last 5 minutes"
+            runbook_url: "https://docs.voicehive.com/runbooks/high-error-rate"
+
+        - alert: VoiceHiveHighLatency
+          expr: histogram_quantile(0.95, rate(voicehive_request_duration_seconds_bucket[5m])) > 2
+          for: 3m
+          labels:
+            severity: warning
+            service: orchestrator
+          annotations:
+            summary: "High response latency detected"
+            description: "95th percentile latency is {{ $value }}s for the last 5 minutes"
+            runbook_url: "https://docs.voicehive.com/runbooks/high-latency"
+
+    # Authentication & Security Alerts
+    - name: voicehive.security
+      interval: 30s
+      rules:
+        - alert: VoiceHiveAuthenticationFailures
+          expr: rate(voicehive_auth_failures_total[5m]) > 10
+          for: 1m
+          labels:
+            severity: warning
+            service: auth
+          annotations:
+            summary: "High authentication failure rate"
+            description: "Authentication failure rate is {{ $value }} failures/sec"
+            runbook_url: "https://docs.voicehive.com/runbooks/auth-failures"
+
+        - alert: VoiceHiveRateLimitExceeded
+          expr: rate(voicehive_rate_limit_exceeded_total[5m]) > 50
+          for: 2m
+          labels:
+            severity: warning
+            service: rate-limiter
+          annotations:
+            summary: "High rate limit violations"
+            description: "Rate limit exceeded {{ $value }} times/sec"
+            runbook_url: "https://docs.voicehive.com/runbooks/rate-limit-exceeded"
+
+        - alert: VoiceHiveSecurityIncident
+          expr: voicehive_security_incidents_total > 0
+          for: 0s
+          labels:
+            severity: critical
+            service: security
+          annotations:
+            summary: "Security incident detected"
+            description: "Security incident reported: {{ $labels.incident_type }}"
+            runbook_url: "https://docs.voicehive.com/runbooks/security-incident"
+
+    # Performance & Resource Alerts
+    - name: voicehive.performance
+      interval: 30s
+      rules:
+        - alert: VoiceHiveHighCPUUsage
+          expr: rate(container_cpu_usage_seconds_total{pod=~"voicehive-.*"}[5m]) > 0.8
+          for: 5m
+          labels:
+            severity: warning
+            service: orchestrator
+          annotations:
+            summary: "High CPU usage detected"
+            description: "CPU usage is {{ $value | humanizePercentage }} for pod {{ $labels.pod }}"
+            runbook_url: "https://docs.voicehive.com/runbooks/high-cpu"
+
+        - alert: VoiceHiveHighMemoryUsage
+          expr: container_memory_usage_bytes{pod=~"voicehive-.*"} / container_spec_memory_limit_bytes > 0.85
+          for: 5m
+          labels:
+            severity: warning
+            service: orchestrator
+          annotations:
+            summary: "High memory usage detected"
+            description: "Memory usage is {{ $value | humanizePercentage }} for pod {{ $labels.pod }}"
+            runbook_url: "https://docs.voicehive.com/runbooks/high-memory"
+
+        - alert: VoiceHiveConnectionPoolExhaustion
+          expr: voicehive_connection_pool_active / voicehive_connection_pool_max > 0.9
+          for: 2m
+          labels:
+            severity: critical
+            service: database
+          annotations:
+            summary: "Connection pool near exhaustion"
+            description: "Connection pool usage is {{ $value | humanizePercentage }}"
+            runbook_url: "https://docs.voicehive.com/runbooks/connection-pool"
+
+    # External Dependencies Alerts
+    - name: voicehive.dependencies
+      interval: 30s
+      rules:
+        - alert: VoiceHiveDatabaseDown
+          expr: voicehive_database_up == 0
+          for: 1m
+          labels:
+            severity: critical
+            service: database
+          annotations:
+            summary: "Database connection lost"
+            description: "Cannot connect to database"
+            runbook_url: "https://docs.voicehive.com/runbooks/database-down"
+
+        - alert: VoiceHiveRedisDown
+          expr: voicehive_redis_up == 0
+          for: 1m
+          labels:
+            severity: critical
+            service: redis
+          annotations:
+            summary: "Redis connection lost"
+            description: "Cannot connect to Redis"
+            runbook_url: "https://docs.voicehive.com/runbooks/redis-down"
+
+        - alert: VoiceHivePMSConnectorFailure
+          expr: rate(voicehive_pms_requests_total{status=~"5.."}[5m]) / rate(voicehive_pms_requests_total[5m]) > 0.1
+          for: 3m
+          labels:
+            severity: warning
+            service: pms-connector
+          annotations:
+            summary: "PMS connector high failure rate"
+            description: "PMS connector error rate is {{ $value | humanizePercentage }}"
+            runbook_url: "https://docs.voicehive.com/runbooks/pms-connector"
+
+        - alert: VoiceHiveCircuitBreakerOpen
+          expr: voicehive_circuit_breaker_state{state="open"} == 1
+          for: 0s
+          labels:
+            severity: warning
+            service: circuit-breaker
+          annotations:
+            summary: "Circuit breaker opened"
+            description: "Circuit breaker for {{ $labels.service }} is open"
+            runbook_url: "https://docs.voicehive.com/runbooks/circuit-breaker"
+
+    # Business Metrics Alerts
+    - name: voicehive.business
+      interval: 60s
+      rules:
+        - alert: VoiceHiveLowCallSuccessRate
+          expr: rate(voicehive_calls_total{status="success"}[10m]) / rate(voicehive_calls_total[10m]) < 0.95
+          for: 5m
+          labels:
+            severity: warning
+            service: call-manager
+          annotations:
+            summary: "Low call success rate"
+            description: "Call success rate is {{ $value | humanizePercentage }}"
+            runbook_url: "https://docs.voicehive.com/runbooks/low-success-rate"
+
+        - alert: VoiceHiveNoCallsProcessed
+          expr: rate(voicehive_calls_total[10m]) == 0
+          for: 10m
+          labels:
+            severity: critical
+            service: call-manager
+          annotations:
+            summary: "No calls being processed"
+            description: "No calls have been processed in the last 10 minutes"
+            runbook_url: "https://docs.voicehive.com/runbooks/no-calls"
+
+        - alert: VoiceHiveHighCallVolume
+          expr: rate(voicehive_calls_total[5m]) > 100
+          for: 5m
+          labels:
+            severity: info
+            service: call-manager
+          annotations:
+            summary: "High call volume detected"
+            description: "Call rate is {{ $value }} calls/sec"
+            runbook_url: "https://docs.voicehive.com/runbooks/high-volume"
+
+    # Deployment & Infrastructure Alerts
+    - name: voicehive.deployment
+      interval: 30s
+      rules:
+        - alert: VoiceHivePodCrashLooping
+          expr: rate(kube_pod_container_status_restarts_total{pod=~"voicehive-.*"}[15m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: kubernetes
+          annotations:
+            summary: "Pod is crash looping"
+            description: "Pod {{ $labels.pod }} is restarting frequently"
+            runbook_url: "https://docs.voicehive.com/runbooks/crash-loop"
+
+        - alert: VoiceHiveDeploymentFailed
+          expr: kube_deployment_status_replicas_unavailable{deployment=~"voicehive-.*"} > 0
+          for: 10m
+          labels:
+            severity: critical
+            service: kubernetes
+          annotations:
+            summary: "Deployment has unavailable replicas"
+            description: "Deployment {{ $labels.deployment }} has {{ $value }} unavailable replicas"
+            runbook_url: "https://docs.voicehive.com/runbooks/deployment-failed"
+
+        - alert: VoiceHiveHPAScalingIssue
+          expr: kube_horizontalpodautoscaler_status_current_replicas{hpa=~"voicehive-.*"} != kube_horizontalpodautoscaler_status_desired_replicas
+          for: 15m
+          labels:
+            severity: warning
+            service: hpa
+          annotations:
+            summary: "HPA scaling issue"
+            description: "HPA {{ $labels.hpa }} cannot reach desired replica count"
+            runbook_url: "https://docs.voicehive.com/runbooks/hpa-scaling"
+
+---
+# AlertManager Configuration for Production
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: voicehive-production
+data:
+  alertmanager.yml: |
+    global:
+      smtp_smarthost: 'smtp.company.com:587'
+      smtp_from: 'alerts@voicehive.com'
+      
+    route:
+      group_by: ['alertname', 'service']
+      group_wait: 10s
+      group_interval: 10s
+      repeat_interval: 1h
+      receiver: 'web.hook'
+      routes:
+      - match:
+          severity: critical
+        receiver: 'critical-alerts'
+        group_wait: 5s
+        repeat_interval: 30m
+      - match:
+          severity: warning
+        receiver: 'warning-alerts'
+        repeat_interval: 2h
+      - match:
+          service: security
+        receiver: 'security-alerts'
+        group_wait: 0s
+        repeat_interval: 15m
+        
+    receivers:
+    - name: 'web.hook'
+      webhook_configs:
+      - url: 'http://alertmanager-webhook:5001/'
+        
+    - name: 'critical-alerts'
+      email_configs:
+      - to: 'oncall@voicehive.com'
+        subject: '🚨 CRITICAL: {{ .GroupLabels.alertname }}'
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Runbook: {{ .Annotations.runbook_url }}
+          {{ end }}
+      slack_configs:
+      - api_url: 'https://hooks.slack.com/services/CRITICAL_WEBHOOK'
+        channel: '#alerts-critical'
+        title: '🚨 Critical Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+      pagerduty_configs:
+      - routing_key: 'PAGERDUTY_INTEGRATION_KEY'
+        description: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        
+    - name: 'warning-alerts'
+      email_configs:
+      - to: 'team@voicehive.com'
+        subject: '⚠️  WARNING: {{ .GroupLabels.alertname }}'
+      slack_configs:
+      - api_url: 'https://hooks.slack.com/services/WARNING_WEBHOOK'
+        channel: '#alerts-warning'
+        title: '⚠️ Warning Alert'
+        
+    - name: 'security-alerts'
+      email_configs:
+      - to: 'security@voicehive.com'
+        subject: '🔒 SECURITY: {{ .GroupLabels.alertname }}'
+      slack_configs:
+      - api_url: 'https://hooks.slack.com/services/SECURITY_WEBHOOK'
+        channel: '#security-alerts'
+        title: '🔒 Security Alert'
+        
+    inhibit_rules:
+    - source_match:
+        severity: 'critical'
+      target_match:
+        severity: 'warning'
+      equal: ['alertname', 'service']

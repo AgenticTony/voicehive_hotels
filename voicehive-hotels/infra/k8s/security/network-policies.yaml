@@ -1,0 +1,442 @@
+# Comprehensive Network Policies for Zero-Trust Architecture
+# Based on Kubernetes Network Policy best practices and production security standards
+
+---
+# Default Deny All Policy - Foundation of Zero Trust
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: zero-trust
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# Allow DNS Resolution - Required for service discovery
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: security
+    security.voicehive.io/policy-type: dns
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow CoreDNS in any namespace
+    - to:
+        - podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# Orchestrator Service Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orchestrator-policy
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: orchestrator
+    security.voicehive.io/policy-type: service-specific
+spec:
+  podSelector:
+    matchLabels:
+      app: orchestrator
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              name: istio-system
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow internal service communication
+    - from:
+        - podSelector:
+            matchLabels:
+              app: livekit-agent
+        - podSelector:
+            matchLabels:
+              app: tts-router
+        - podSelector:
+            matchLabels:
+              app: riva-asr-proxy
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+  egress:
+    # Allow database connections
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow Redis connections
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Allow Vault connections
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 8200
+    # Allow HTTPS for external APIs
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow internal service communication
+    - to:
+        - podSelector:
+            matchLabels:
+              app: livekit-agent
+        - podSelector:
+            matchLabels:
+              app: tts-router
+        - podSelector:
+            matchLabels:
+              app: riva-asr-proxy
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9090
+
+---
+# LiveKit Agent Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: livekit-agent-policy
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: livekit-agent
+    security.voicehive.io/policy-type: service-specific
+spec:
+  podSelector:
+    matchLabels:
+      app: livekit-agent
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from orchestrator
+    - from:
+        - podSelector:
+            matchLabels:
+              app: orchestrator
+      ports:
+        - protocol: TCP
+          port: 9090
+    # Allow monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+  egress:
+    # Allow LiveKit Cloud connections
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 7881 # LiveKit WebRTC
+    # Allow orchestrator communication
+    - to:
+        - podSelector:
+            matchLabels:
+              app: orchestrator
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow TTS router communication
+    - to:
+        - podSelector:
+            matchLabels:
+              app: tts-router
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow ASR proxy communication
+    - to:
+        - podSelector:
+            matchLabels:
+              app: riva-asr-proxy
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# TTS Router Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tts-router-policy
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: tts-router
+    security.voicehive.io/policy-type: service-specific
+spec:
+  podSelector:
+    matchLabels:
+      app: tts-router
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from orchestrator and livekit-agent
+    - from:
+        - podSelector:
+            matchLabels:
+              app: orchestrator
+        - podSelector:
+            matchLabels:
+              app: livekit-agent
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+  egress:
+    # Allow Azure Speech Service
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    # Allow orchestrator communication
+    - to:
+        - podSelector:
+            matchLabels:
+              app: orchestrator
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# Riva ASR Proxy Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: riva-asr-proxy-policy
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: riva-asr-proxy
+    security.voicehive.io/policy-type: service-specific
+spec:
+  podSelector:
+    matchLabels:
+      app: riva-asr-proxy
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from orchestrator and livekit-agent
+    - from:
+        - podSelector:
+            matchLabels:
+              app: orchestrator
+        - podSelector:
+            matchLabels:
+              app: livekit-agent
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+  egress:
+    # Allow NVIDIA Riva connections
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 50051 # gRPC
+        - protocol: TCP
+          port: 443
+    # Allow orchestrator communication
+    - to:
+        - podSelector:
+            matchLabels:
+              app: orchestrator
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+# Monitoring Access Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-access
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: monitoring
+    security.voicehive.io/policy-type: monitoring
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow Prometheus scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+
+---
+# External Database Access Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: external-database-access
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: database
+    security.voicehive.io/policy-type: external-access
+spec:
+  podSelector:
+    matchLabels:
+      app: orchestrator
+  policyTypes:
+    - Egress
+  egress:
+    # Allow PostgreSQL connections to RDS
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow Redis connections to ElastiCache
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# Vault Access Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vault-access
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: vault
+    security.voicehive.io/policy-type: secrets-management
+spec:
+  podSelector:
+    matchLabels:
+      app: orchestrator
+  policyTypes:
+    - Egress
+  egress:
+    # Allow Vault connections
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 8200
+
+---
+# Emergency Break-Glass Policy (Disabled by default)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: emergency-break-glass
+  namespace: voicehive
+  labels:
+    app.kubernetes.io/name: voicehive
+    app.kubernetes.io/component: emergency
+    security.voicehive.io/policy-type: break-glass
+    security.voicehive.io/enabled: "false"
+  annotations:
+    security.voicehive.io/description: "Emergency policy to allow all traffic - USE ONLY IN EMERGENCIES"
+    security.voicehive.io/approval-required: "true"
+    security.voicehive.io/incident-id: ""
+spec:
+  podSelector:
+    matchLabels:
+      security.voicehive.io/break-glass: "enabled"
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - {}
+  egress:
+    - {}

@@ -1,0 +1,364 @@
+# VoiceHive Hotels - Falco Security Rules
+# Runtime security monitoring for containerized applications
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-rules-voicehive
+  namespace: falco-system
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: rules
+data:
+  voicehive_rules.yaml: |
+    # VoiceHive Hotels Custom Security Rules
+
+    # Macro definitions for VoiceHive containers
+    - macro: voicehive_containers
+      condition: >
+        (container.image.repository contains "voicehive" or 
+         container.image.repository contains "ghcr.io/voicehive-hotels" or
+         k8s.ns.name = "voicehive")
+
+    - macro: voicehive_services
+      condition: >
+        (k8s.deployment.name in (orchestrator, connectors, riva-proxy, tts-router, media-agent) or
+         container.name in (orchestrator, connectors, riva-proxy, tts-router, media-agent))
+
+    - macro: allowed_voicehive_processes
+      condition: >
+        (proc.name in (python, python3, uvicorn, gunicorn, celery) or
+         proc.pname in (python, python3, uvicorn, gunicorn, celery))
+
+    - macro: voicehive_network_ports
+      condition: >
+        (fd.sport in (8080, 8081, 9000, 8001, 5432, 6379, 443, 80) or
+         fd.dport in (8080, 8081, 9000, 8001, 5432, 6379, 443, 80))
+
+    # Critical Security Rules
+
+    - rule: VoiceHive Container Privilege Escalation Attempt
+      desc: Detect attempts to escalate privileges in VoiceHive containers
+      condition: >
+        spawned_process and container and voicehive_containers and
+        (proc.name in (su, sudo, setuid, setgid, newgrp) or
+         (proc.args contains "--privileged" or 
+          proc.args contains "--cap-add" or
+          proc.args contains "--user=root" or
+          proc.args contains "-u 0"))
+      output: >
+        Privilege escalation attempt detected in VoiceHive container
+        (user=%user.name command=%proc.cmdline container=%container.name 
+         image=%container.image.repository pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: CRITICAL
+      tags: [container, privilege_escalation, voicehive, security]
+
+    - rule: VoiceHive Root Process Execution
+      desc: Detect processes running as root in VoiceHive containers
+      condition: >
+        spawned_process and container and voicehive_containers and
+        proc.vpid = 1 and user.uid = 0 and
+        not allowed_voicehive_processes
+      output: >
+        Root process detected in VoiceHive container
+        (user=%user.name process=%proc.name command=%proc.cmdline 
+         container=%container.name image=%container.image.repository 
+         pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: CRITICAL
+      tags: [container, root_process, voicehive, security]
+
+    - rule: VoiceHive Unauthorized File System Write
+      desc: Detect unauthorized write operations in VoiceHive containers
+      condition: >
+        open_write and container and voicehive_containers and
+        (fd.name startswith /app or fd.name startswith /opt/venv) and
+        not allowed_voicehive_processes and
+        not fd.name contains ".pyc" and
+        not fd.name contains "__pycache__" and
+        not fd.name startswith "/tmp" and
+        not fd.name startswith "/var/tmp"
+      output: >
+        Unauthorized file write detected in VoiceHive container
+        (file=%fd.name process=%proc.name command=%proc.cmdline 
+         container=%container.name image=%container.image.repository 
+         pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: HIGH
+      tags: [filesystem, container, voicehive, security]
+
+    - rule: VoiceHive Suspicious Network Connection
+      desc: Detect suspicious network connections from VoiceHive containers
+      condition: >
+        inbound_outbound and container and voicehive_containers and
+        fd.net and not voicehive_network_ports and
+        not proc.name in (python, python3, uvicorn, gunicorn) and
+        not fd.sip in (127.0.0.1, "::1") and
+        not fd.dip in (127.0.0.1, "::1")
+      output: >
+        Suspicious network connection from VoiceHive container
+        (connection=%fd.name direction=%evt.type process=%proc.name 
+         container=%container.name image=%container.image.repository 
+         pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: WARNING
+      tags: [network, container, voicehive, security]
+
+    - rule: VoiceHive Package Manager Execution
+      desc: Detect package manager execution in VoiceHive containers
+      condition: >
+        spawned_process and container and voicehive_containers and
+        proc.name in (apt, apt-get, yum, dnf, pip, pip3, npm, yarn, gem, composer)
+      output: >
+        Package manager executed in VoiceHive container
+        (process=%proc.name command=%proc.cmdline container=%container.name 
+         image=%container.image.repository pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: HIGH
+      tags: [container, package_manager, voicehive, security]
+
+    - rule: VoiceHive Shell Execution
+      desc: Detect shell execution in VoiceHive containers (should not happen in distroless)
+      condition: >
+        spawned_process and container and voicehive_containers and
+        proc.name in (sh, bash, zsh, fish, csh, tcsh, dash)
+      output: >
+        Shell execution detected in VoiceHive container (distroless violation)
+        (shell=%proc.name command=%proc.cmdline container=%container.name 
+         image=%container.image.repository pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: CRITICAL
+      tags: [container, shell, distroless, voicehive, security]
+
+    # Data Protection Rules
+
+    - rule: VoiceHive PII Data Access
+      desc: Detect potential PII data access in VoiceHive containers
+      condition: >
+        open_read and container and voicehive_containers and
+        (fd.name contains "pii" or 
+         fd.name contains "personal" or 
+         fd.name contains "gdpr" or
+         fd.name contains "customer" or
+         fd.name contains "guest") and
+        not proc.name in (python, python3, uvicorn, gunicorn)
+      output: >
+        Potential PII data access detected in VoiceHive container
+        (file=%fd.name process=%proc.name container=%container.name 
+         image=%container.image.repository pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: HIGH
+      tags: [data_protection, pii, gdpr, voicehive, security]
+
+    - rule: VoiceHive Database Connection Anomaly
+      desc: Detect unusual database connections from VoiceHive containers
+      condition: >
+        inbound_outbound and container and voicehive_containers and
+        fd.net and fd.dport in (5432, 3306, 1433, 27017) and
+        not proc.name in (python, python3, uvicorn, gunicorn, psql, mysql, mongo)
+      output: >
+        Unusual database connection from VoiceHive container
+        (connection=%fd.name process=%proc.name container=%container.name 
+         image=%container.image.repository pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: WARNING
+      tags: [database, network, voicehive, security]
+
+    # Compliance and Monitoring Rules
+
+    - rule: VoiceHive Configuration File Modification
+      desc: Detect modifications to configuration files in VoiceHive containers
+      condition: >
+        open_write and container and voicehive_containers and
+        (fd.name contains "config" or 
+         fd.name contains ".env" or 
+         fd.name contains ".yaml" or 
+         fd.name contains ".yml" or
+         fd.name contains ".json" or
+         fd.name contains ".ini") and
+        not proc.name in (python, python3, uvicorn, gunicorn)
+      output: >
+        Configuration file modification detected in VoiceHive container
+        (file=%fd.name process=%proc.name container=%container.name 
+         image=%container.image.repository pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: WARNING
+      tags: [configuration, filesystem, voicehive, security]
+
+    - rule: VoiceHive Crypto Mining Activity
+      desc: Detect potential cryptocurrency mining in VoiceHive containers
+      condition: >
+        spawned_process and container and voicehive_containers and
+        (proc.name in (xmrig, cpuminer, cgminer, bfgminer, sgminer) or
+         proc.cmdline contains "stratum" or
+         proc.cmdline contains "mining" or
+         proc.cmdline contains "hashrate")
+      output: >
+        Potential crypto mining activity detected in VoiceHive container
+        (process=%proc.name command=%proc.cmdline container=%container.name 
+         image=%container.image.repository pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: CRITICAL
+      tags: [crypto_mining, malware, voicehive, security]
+
+    - rule: VoiceHive Reverse Shell Activity
+      desc: Detect potential reverse shell connections from VoiceHive containers
+      condition: >
+        inbound_outbound and container and voicehive_containers and
+        fd.net and (proc.name in (nc, netcat, ncat, socat, telnet) or
+         (proc.cmdline contains "/bin/sh" and fd.net) or
+         (proc.cmdline contains "/bin/bash" and fd.net))
+      output: >
+        Potential reverse shell activity detected in VoiceHive container
+        (process=%proc.name command=%proc.cmdline connection=%fd.name 
+         container=%container.name image=%container.image.repository 
+         pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: CRITICAL
+      tags: [reverse_shell, malware, voicehive, security]
+
+    # Performance and Resource Rules
+
+    - rule: VoiceHive High CPU Usage Process
+      desc: Detect processes consuming high CPU in VoiceHive containers
+      condition: >
+        spawned_process and container and voicehive_containers and
+        proc.cpu_usage > 80 and
+        not proc.name in (python, python3, uvicorn, gunicorn)
+      output: >
+        High CPU usage process detected in VoiceHive container
+        (process=%proc.name cpu_usage=%proc.cpu_usage container=%container.name 
+         image=%container.image.repository pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: WARNING
+      tags: [performance, resource, voicehive, monitoring]
+
+    - rule: VoiceHive Memory Exhaustion
+      desc: Detect potential memory exhaustion in VoiceHive containers
+      condition: >
+        spawned_process and container and voicehive_containers and
+        proc.memory_usage > 90
+      output: >
+        High memory usage detected in VoiceHive container
+        (process=%proc.name memory_usage=%proc.memory_usage container=%container.name 
+         image=%container.image.repository pod=%k8s.pod.name namespace=%k8s.ns.name)
+      priority: WARNING
+      tags: [performance, memory, voicehive, monitoring]
+
+    # Kubernetes-specific Rules
+
+    - rule: VoiceHive Pod Security Context Violation
+      desc: Detect violations of pod security context in VoiceHive deployments
+      condition: >
+        k8s_audit and ka.verb in (create, update) and
+        ka.target.resource = pods and
+        ka.target.namespace = voicehive and
+        (ka.request_object.spec.securityContext.runAsRoot = true or
+         ka.request_object.spec.securityContext.privileged = true or
+         ka.request_object.spec.securityContext.allowPrivilegeEscalation = true)
+      output: >
+        Pod security context violation in VoiceHive namespace
+        (pod=%ka.target.name namespace=%ka.target.namespace 
+         user=%ka.user.name verb=%ka.verb)
+      priority: HIGH
+      tags: [kubernetes, security_context, voicehive, security]
+
+    - rule: VoiceHive Unauthorized Service Account Usage
+      desc: Detect unauthorized service account usage in VoiceHive namespace
+      condition: >
+        k8s_audit and ka.verb in (create, update) and
+        ka.target.resource = pods and
+        ka.target.namespace = voicehive and
+        not ka.request_object.spec.serviceAccountName in (voicehive-orchestrator, voicehive-connectors, voicehive-media, default)
+      output: >
+        Unauthorized service account usage in VoiceHive namespace
+        (pod=%ka.target.name service_account=%ka.request_object.spec.serviceAccountName 
+         namespace=%ka.target.namespace user=%ka.user.name)
+      priority: WARNING
+      tags: [kubernetes, service_account, voicehive, security]
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-config-voicehive
+  namespace: falco-system
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: config
+data:
+  falco.yaml: |
+    # Falco configuration for VoiceHive Hotels
+
+    rules_file:
+      - /etc/falco/falco_rules.yaml
+      - /etc/falco/falco_rules.local.yaml
+      - /etc/falco/k8s_audit_rules.yaml
+      - /etc/falco/rules.d/voicehive_rules.yaml
+
+    time_format_iso_8601: true
+    json_output: true
+    json_include_output_property: true
+    json_include_tags_property: true
+
+    priority: DEBUG
+
+    buffered_outputs: false
+
+    syscall_event_drops:
+      actions:
+        - log
+        - alert
+      rate: 0.03333
+      max_burst: 1000
+
+    outputs:
+      rate: 1
+      max_burst: 1000
+
+    syslog_output:
+      enabled: false
+
+    file_output:
+      enabled: true
+      keep_alive: false
+      filename: /var/log/falco/events.log
+
+    stdout_output:
+      enabled: true
+
+    webserver:
+      enabled: true
+      listen_port: 8765
+      k8s_healthz_endpoint: /healthz
+      ssl_enabled: false
+
+    program_output:
+      enabled: false
+      keep_alive: false
+      program: "jq '{text: .output}' | curl -d @- -X POST https://hooks.slack.com/services/XXX"
+
+    http_output:
+      enabled: true
+      url: "http://falcosidekick:2801"
+      user_agent: "falcosidekick"
+
+    grpc:
+      enabled: false
+      bind_address: "0.0.0.0:5060"
+      threadiness: 0
+
+    grpc_output:
+      enabled: false
+
+    # Kubernetes audit log configuration
+    k8s_audit_endpoint: /k8s-audit
+
+    # Load plugins
+    load_plugins: []
+
+    # Modern BPF probe
+    modern_bpf:
+      cpus_for_each_syscall_buffer: 2
+
+    # Metrics
+    metrics:
+      enabled: true
+      interval: 15s
+      output_rule: true
+      rules_counters_enabled: true
+      resource_utilization_enabled: true
+      state_counters_enabled: true
+      kernel_event_counters_enabled: true
+      libbpf_stats_enabled: true
+      convert_memory_to_mb: true
+      include_empty_values: false

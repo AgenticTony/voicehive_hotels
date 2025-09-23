@@ -1,0 +1,356 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "VoiceHive Production Overview",
+    "tags": ["voicehive", "production", "overview"],
+    "style": "dark",
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Service Health Overview",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "up{job=\"voicehive-orchestrator\"}",
+            "legendFormat": "Orchestrator",
+            "refId": "A"
+          },
+          {
+            "expr": "voicehive_database_up",
+            "legendFormat": "Database",
+            "refId": "B"
+          },
+          {
+            "expr": "voicehive_redis_up",
+            "legendFormat": "Redis",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "green", "value": 1}
+              ]
+            },
+            "mappings": [
+              {"options": {"0": {"text": "DOWN"}}, "type": "value"},
+              {"options": {"1": {"text": "UP"}}, "type": "value"}
+            ]
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Request Rate",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "rate(voicehive_requests_total[5m])",
+            "legendFormat": "Requests/sec",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {"label": "Requests/sec", "min": 0},
+          {"show": false}
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Error Rate",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "rate(voicehive_requests_total{status=~\"4..|5..\"}[5m]) / rate(voicehive_requests_total[5m]) * 100",
+            "legendFormat": "Error Rate %",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {"label": "Percentage", "min": 0, "max": 100},
+          {"show": false}
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {"params": [5], "type": "gt"},
+              "operator": {"type": "and"},
+              "query": {"params": ["A", "5m", "now"]},
+              "reducer": {"params": [], "type": "avg"},
+              "type": "query"
+            }
+          ],
+          "executionErrorState": "alerting",
+          "for": "2m",
+          "frequency": "10s",
+          "handler": 1,
+          "name": "High Error Rate Alert",
+          "noDataState": "no_data",
+          "notifications": []
+        }
+      },
+      {
+        "id": 4,
+        "title": "Response Time (95th percentile)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(voicehive_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "95th percentile",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(voicehive_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "50th percentile",
+            "refId": "B"
+          }
+        ],
+        "yAxes": [
+          {"label": "Seconds", "min": 0},
+          {"show": false}
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Active Calls",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "voicehive_active_calls",
+            "legendFormat": "Active Calls",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Call Success Rate",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(voicehive_calls_total{status=\"success\"}[5m]) / rate(voicehive_calls_total[5m]) * 100",
+            "legendFormat": "Success Rate %",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 90},
+                {"color": "green", "value": 95}
+              ]
+            },
+            "unit": "percent"
+          }
+        }
+      },
+      {
+        "id": 7,
+        "title": "Authentication Metrics",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(voicehive_auth_requests_total[5m])",
+            "legendFormat": "Auth Requests/sec",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(voicehive_auth_failures_total[5m])",
+            "legendFormat": "Auth Failures/sec",
+            "refId": "B"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Rate Limiting",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 16},
+        "targets": [
+          {
+            "expr": "rate(voicehive_rate_limit_exceeded_total[5m])",
+            "legendFormat": "Rate Limits/sec",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Resource Usage - CPU",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+        "targets": [
+          {
+            "expr": "rate(container_cpu_usage_seconds_total{pod=~\"voicehive-.*\"}[5m]) * 100",
+            "legendFormat": "{{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {"label": "CPU %", "min": 0, "max": 100},
+          {"show": false}
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Resource Usage - Memory",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+        "targets": [
+          {
+            "expr": "container_memory_usage_bytes{pod=~\"voicehive-.*\"} / 1024 / 1024",
+            "legendFormat": "{{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {"label": "Memory (MB)", "min": 0},
+          {"show": false}
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Database Connection Pool",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
+        "targets": [
+          {
+            "expr": "voicehive_connection_pool_active",
+            "legendFormat": "Active Connections",
+            "refId": "A"
+          },
+          {
+            "expr": "voicehive_connection_pool_idle",
+            "legendFormat": "Idle Connections",
+            "refId": "B"
+          },
+          {
+            "expr": "voicehive_connection_pool_max",
+            "legendFormat": "Max Connections",
+            "refId": "C"
+          }
+        ],
+        "yAxes": [
+          {"label": "Connections", "min": 0},
+          {"show": false}
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Circuit Breaker Status",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 28},
+        "targets": [
+          {
+            "expr": "voicehive_circuit_breaker_state",
+            "legendFormat": "{{service}} - {{state}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 0.5},
+                {"color": "red", "value": 1}
+              ]
+            },
+            "mappings": [
+              {"options": {"0": {"text": "CLOSED"}}, "type": "value"},
+              {"options": {"0.5": {"text": "HALF-OPEN"}}, "type": "value"},
+              {"options": {"1": {"text": "OPEN"}}, "type": "value"}
+            ]
+          }
+        }
+      },
+      {
+        "id": 13,
+        "title": "PMS Connector Performance",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 36},
+        "targets": [
+          {
+            "expr": "rate(voicehive_pms_requests_total[5m])",
+            "legendFormat": "PMS Requests/sec",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(voicehive_pms_requests_total{status=~\"5..\"}[5m])",
+            "legendFormat": "PMS Errors/sec",
+            "refId": "B"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(voicehive_pms_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "PMS 95th percentile latency",
+            "refId": "C"
+          }
+        ],
+        "yAxes": [
+          {"label": "Requests/sec & Latency", "min": 0},
+          {"show": false}
+        ]
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "namespace",
+          "type": "query",
+          "query": "label_values(up{job=\"voicehive-orchestrator\"}, namespace)",
+          "current": {"value": "voicehive-production"},
+          "options": [],
+          "refresh": 1
+        },
+        {
+          "name": "pod",
+          "type": "query",
+          "query": "label_values(up{job=\"voicehive-orchestrator\", namespace=\"$namespace\"}, pod)",
+          "current": {"value": "All"},
+          "options": [],
+          "refresh": 1,
+          "multi": true,
+          "includeAll": true
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "name": "Deployments",
+          "datasource": "Prometheus",
+          "expr": "changes(voicehive_build_info[1h])",
+          "titleFormat": "Deployment",
+          "textFormat": "Version: {{version}}",
+          "iconColor": "blue"
+        }
+      ]
+    }
+  }
+}

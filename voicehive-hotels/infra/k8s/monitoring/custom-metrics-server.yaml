@@ -1,0 +1,337 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: custom-metrics-apiserver
+  namespace: voicehive-monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: custom-metrics-server-resources
+rules:
+  - apiGroups:
+      - custom.metrics.k8s.io
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: custom-metrics-resource-reader
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+      - pods
+      - services
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: custom-metrics:system:auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: custom-metrics-apiserver
+    namespace: voicehive-monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: custom-metrics-auth-reader
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: custom-metrics-apiserver
+    namespace: voicehive-monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: custom-metrics-resource-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: custom-metrics-resource-reader
+subjects:
+  - kind: ServiceAccount
+    name: custom-metrics-apiserver
+    namespace: voicehive-monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hpa-controller-custom-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: custom-metrics-server-resources
+subjects:
+  - kind: ServiceAccount
+    name: horizontal-pod-autoscaler
+    namespace: kube-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adapter-config
+  namespace: voicehive-monitoring
+data:
+  config.yaml: |
+    rules:
+    # VoiceHive Orchestrator metrics
+    - seriesQuery: 'voicehive_active_requests{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^voicehive_active_requests"
+        as: "voicehive_active_requests_per_pod"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[2m])'
+
+    - seriesQuery: 'voicehive_request_queue_size{namespace!="",service!=""}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          service: {resource: "service"}
+      name:
+        matches: "^voicehive_request_queue_size"
+        as: "voicehive_request_queue_depth"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[1m])'
+
+    - seriesQuery: 'voicehive_request_duration_seconds{namespace!="",pod!="",quantile="0.95"}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^voicehive_request_duration_seconds"
+        as: "voicehive_response_time_p95_seconds"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[2m])'
+
+    - seriesQuery: 'voicehive_error_rate{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^voicehive_error_rate"
+        as: "voicehive_error_rate_percent"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[5m])'
+
+    # LiveKit Agent metrics
+    - seriesQuery: 'voicehive_active_call_sessions{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^voicehive_active_call_sessions"
+        as: "voicehive_active_call_sessions_per_pod"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[1m])'
+
+    - seriesQuery: 'voicehive_audio_processing_queue{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^voicehive_audio_processing_queue"
+        as: "voicehive_audio_processing_queue_depth"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[1m])'
+
+    - seriesQuery: 'voicehive_webrtc_connections{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^voicehive_webrtc_connections"
+        as: "voicehive_webrtc_connections_per_pod"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[1m])'
+
+    # TTS Router metrics
+    - seriesQuery: 'voicehive_tts_requests_per_second{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^voicehive_tts_requests_per_second"
+        as: "voicehive_tts_requests_per_second_per_pod"
+      metricsQuery: 'rate(<<.Series>>{<<.LabelMatchers>>}[2m])'
+
+    - seriesQuery: 'voicehive_tts_processing_duration_seconds{namespace!="",pod!="",quantile="0.95"}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^voicehive_tts_processing_duration_seconds"
+        as: "voicehive_tts_processing_latency_seconds"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[2m])'
+
+    # ASR Proxy metrics
+    - seriesQuery: 'voicehive_asr_streaming_connections{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^voicehive_asr_streaming_connections"
+        as: "voicehive_asr_streaming_connections_per_pod"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[1m])'
+
+    - seriesQuery: 'voicehive_asr_processing_queue{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace: {resource: "namespace"}
+          pod: {resource: "pod"}
+      name:
+        matches: "^voicehive_asr_processing_queue"
+        as: "voicehive_asr_processing_queue_depth"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[1m])'
+
+    # External metrics (Redis)
+    externalRules:
+    - seriesQuery: 'redis_connection_pool_utilization{service="voicehive-orchestrator"}'
+      name:
+        matches: "^redis_connection_pool_utilization"
+        as: "redis_connection_pool_utilization"
+      metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[2m])'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: custom-metrics-apiserver
+  name: custom-metrics-apiserver
+  namespace: voicehive-monitoring
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: custom-metrics-apiserver
+  template:
+    metadata:
+      labels:
+        app: custom-metrics-apiserver
+      name: custom-metrics-apiserver
+    spec:
+      serviceAccountName: custom-metrics-apiserver
+      containers:
+        - name: custom-metrics-apiserver
+          image: k8s.gcr.io/prometheus-adapter/prometheus-adapter:v0.11.1
+          args:
+            - --secure-port=6443
+            - --tls-cert-file=/var/run/serving-cert/tls.crt
+            - --tls-private-key-file=/var/run/serving-cert/tls.key
+            - --logtostderr=true
+            - --prometheus-url=http://prometheus.voicehive-monitoring.svc:9090/
+            - --metrics-relist-interval=1m
+            - --v=4
+            - --config=/etc/adapter/config.yaml
+          ports:
+            - containerPort: 6443
+              name: https
+          volumeMounts:
+            - mountPath: /var/run/serving-cert
+              name: volume-serving-cert
+              readOnly: true
+            - mountPath: /etc/adapter/
+              name: config
+              readOnly: true
+            - mountPath: /tmp
+              name: tmp-vol
+          resources:
+            limits:
+              cpu: 250m
+              memory: 200Mi
+            requests:
+              cpu: 102m
+              memory: 180Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: volume-serving-cert
+          secret:
+            secretName: cm-adapter-serving-certs
+        - name: config
+          configMap:
+            name: adapter-config
+        - name: tmp-vol
+          emptyDir: {}
+      nodeSelector:
+        kubernetes.io/os: linux
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - custom-metrics-apiserver
+                topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: custom-metrics-apiserver
+  namespace: voicehive-monitoring
+spec:
+  ports:
+    - name: https
+      port: 443
+      targetPort: 6443
+  selector:
+    app: custom-metrics-apiserver
+---
+apiVersion: apiregistration.k8s.io/v1beta1
+kind: APIService
+metadata:
+  name: v1beta1.custom.metrics.k8s.io
+spec:
+  service:
+    name: custom-metrics-apiserver
+    namespace: voicehive-monitoring
+  group: custom.metrics.k8s.io
+  version: v1beta1
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 100
+  versionPriority: 100
+---
+apiVersion: apiregistration.k8s.io/v1beta1
+kind: APIService
+metadata:
+  name: v1beta1.external.metrics.k8s.io
+spec:
+  service:
+    name: custom-metrics-apiserver
+    namespace: voicehive-monitoring
+  group: external.metrics.k8s.io
+  version: v1beta1
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 100
+  versionPriority: 100

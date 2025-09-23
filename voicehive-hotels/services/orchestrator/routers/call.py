@@ -12,7 +12,9 @@ import redis.asyncio as redis
 from ..logging_adapter import get_safe_logger
 from ..models import CallStartRequest, CallStartResponse
 from ..config import REGION, LIVEKIT_URL, GDPR_CONFIG
-from ..dependencies import verify_api_key, get_redis
+from ..dependencies import get_redis
+from ..auth_middleware import get_auth_context, require_permissions, Permission
+from ..auth_models import UserContext, ServiceContext
 from ..metrics import call_counter, active_calls
 
 # Logger
@@ -25,7 +27,7 @@ router = APIRouter(prefix="/v1/call", tags=["calls"])
 @router.post("/start", response_model=CallStartResponse)
 async def start_call(
     request: CallStartRequest,
-    api_key: str = Depends(verify_api_key),
+    auth_context = Depends(require_permissions(Permission.CALL_START)),
     redis_client: redis.Redis = Depends(get_redis)
 ):
     """Start a new call with GDPR compliance checks"""
@@ -57,7 +59,8 @@ async def start_call(
     )
     
     # Generate session token
-    session_token = hashlib.sha256(f"{call_id}:{api_key}".encode()).hexdigest()
+    auth_id = auth_context.user_id if isinstance(auth_context, UserContext) else auth_context.service_name
+    session_token = hashlib.sha256(f"{call_id}:{auth_id}".encode()).hexdigest()
     
     # Increment metrics
     call_counter.labels(
