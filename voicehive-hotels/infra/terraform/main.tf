@@ -113,6 +113,10 @@ module "eks" {
   
   cluster_endpoint_private_access = true
   cluster_endpoint_public_access  = true
+
+  # SECURITY: Restrict public access to specific CIDR blocks only
+  # This prevents unauthorized access from the entire internet
+  cluster_endpoint_public_access_cidrs = var.allowed_cidr_blocks
   
   # Encryption for compliance
   cluster_encryption_config = [{

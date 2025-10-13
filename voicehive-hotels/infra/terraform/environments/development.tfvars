@@ -36,6 +36,14 @@ transcript_retention_days  = 30
 # Disable deletion protection in dev
 enable_deletion_protection = false
 
+# EKS API Endpoint Security - Development allows broader access for testing
+# SECURITY NOTE: Never use 0.0.0.0/0 even in development
+allowed_cidr_blocks = [
+  "10.0.0.0/8",     # Private networks for development/testing
+  "172.16.0.0/12",  # Private networks
+  "192.168.0.0/16"  # Private networks
+]
+
 # Additional tags
 tags = {
   CostCenter = "Development"

@@ -36,6 +36,14 @@ transcript_retention_days  = 90
 # Enable deletion protection
 enable_deletion_protection = true
 
+# EKS API Endpoint Security - Staging requires restricted access
+# IMPORTANT: Replace with actual office/VPN CIDR blocks before deployment
+allowed_cidr_blocks = [
+  # "203.0.113.0/24",  # Example: Replace with actual office IP range
+  # "198.51.100.0/24", # Example: Replace with actual VPN CIDR range
+  "10.1.0.0/16"        # Allow VPC internal access only as fallback
+]
+
 # Additional tags
 tags = {
   CostCenter = "Staging"

@@ -36,6 +36,16 @@ transcript_retention_days  = 90
 # Enable deletion protection
 enable_deletion_protection = true
 
+# EKS API Endpoint Security - Production requires maximum security
+# CRITICAL: Must be configured with actual authorized CIDR blocks before deployment
+# Never deploy without proper IP restrictions!
+allowed_cidr_blocks = [
+  # "192.0.2.0/24",    # Example: Replace with actual office IP range
+  # "203.0.113.0/24",  # Example: Replace with actual VPN CIDR range
+  # "198.51.100.0/24", # Example: Replace with actual admin access range
+  "10.2.0.0/16"        # Allow VPC internal access only as absolute fallback
+]
+
 # Additional tags
 tags = {
   CostCenter = "Production"

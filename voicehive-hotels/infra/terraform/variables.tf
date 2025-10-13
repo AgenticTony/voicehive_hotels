@@ -37,6 +37,17 @@ variable "public_subnet_cidrs" {
   default     = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
 }
 
+variable "allowed_cidr_blocks" {
+  description = "CIDR blocks allowed to access EKS cluster API endpoint (security best practice - never use 0.0.0.0/0)"
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = !contains(var.allowed_cidr_blocks, "0.0.0.0/0")
+    error_message = "EKS cluster endpoint must not allow access from 0.0.0.0/0 (entire internet). Specify specific CIDR blocks only."
+  }
+}
+
 variable "node_groups" {
   description = "EKS node group configurations"
   type = object({
