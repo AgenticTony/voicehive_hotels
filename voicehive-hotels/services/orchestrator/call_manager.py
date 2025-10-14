@@ -5,6 +5,7 @@ Manages call state, coordinates between LiveKit, ASR, TTS, and LLM services
 
 import asyncio
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from uuid import uuid4
@@ -19,6 +20,7 @@ from openai import AzureOpenAI
 from connectors import ConnectorFactory
 from services.orchestrator.utils import PIIRedactor
 from services.orchestrator.tts_client import TTSClient, TTSSynthesisResponse
+from services.orchestrator.intent_detection_service import IntentDetectionService, IntentType
 from services.orchestrator.logging_adapter import get_safe_logger
 
 # Use safe logger adapter
@@ -147,7 +149,10 @@ class CallManager:
         
         # Initialize TTS client
         self.tts_client = TTSClient(tts_url=self.tts_url)
-        
+
+        # Initialize Intent Detection Service
+        self.intent_service = IntentDetectionService()
+
         # Initialize Azure OpenAI client
         self.openai_client = AzureOpenAI(
             azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
@@ -527,7 +532,7 @@ class CallManager:
         """Process user input with Azure OpenAI and function calling"""
         try:
             # Detect intent first
-            intent = self._detect_intent(text)
+            intent = await self._detect_intent(text)
             context.current_intent = intent
             
             # Build conversation messages for LLM
@@ -572,7 +577,7 @@ class CallManager:
         except Exception as e:
             logger.error(f"LLM processing failed: {e}")
             # Fallback to template response
-            return self._get_fallback_response(context, text)
+            return await self._get_fallback_response(context, text)
     
     def _get_hotel_functions(self) -> List[Dict[str, Any]]:
         """Define available functions for hotel operations"""
@@ -750,9 +755,9 @@ class CallManager:
         
         return {"error": "Unknown function"}
     
-    def _get_fallback_response(self, context: CallContext, text: str) -> Dict[str, Any]:
+    async def _get_fallback_response(self, context: CallContext, text: str) -> Dict[str, Any]:
         """Get fallback response when LLM fails"""
-        intent = self._detect_intent(text)
+        intent = await self._detect_intent(text)
         
         templates = {
             "greeting": "Hello! How may I assist you today?",
@@ -831,3 +836,33 @@ class CallManager:
             
         # Otherwise map to default regional variant
         return language_map.get(language, "en-US")
+
+    async def _detect_intent(self, text: str) -> str:
+        """
+        Detect user intent from text using the Intent Detection Service.
+
+        Args:
+            text (str): User input text to analyze
+
+        Returns:
+            str: Detected intent string
+        """
+        try:
+            result = await self.intent_service.detect_intent(text)
+
+            # Log detection results
+            logger.info(
+                "intent_detected",
+                text=pii_redactor.redact_text(text),
+                intent=result.intent.value,
+                confidence=result.confidence,
+                confidence_level=result.confidence_level.value,
+                detected_language=result.detected_language,
+                processing_time_ms=result.processing_time_ms
+            )
+
+            return result.intent.value
+
+        except Exception as e:
+            logger.error(f"Intent detection failed: {e}")
+            return IntentType.UNKNOWN.value

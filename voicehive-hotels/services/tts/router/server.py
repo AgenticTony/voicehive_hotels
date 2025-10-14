@@ -116,6 +116,7 @@ class TTSRouter:
         self.http_client = httpx.AsyncClient(timeout=30.0)
         self.redis_client = None
         self.voice_mapping = self._initialize_voice_mapping()
+        self.voice_name_lookup = self._initialize_voice_name_lookup()
         
     async def initialize(self):
         """Initialize Redis connection"""
@@ -160,7 +161,103 @@ class TTSRouter:
                 "default_engine": "azure"
             }
         }
-        
+
+    def _initialize_voice_name_lookup(self) -> Dict[str, Dict[str, str]]:
+        """Initialize voice name to ID lookup table"""
+        return {
+            # ElevenLabs voices
+            "rachel": {"voice_id": "21m00Tcm4TlvDq8ikWAM", "engine": "elevenlabs", "language": "en-US", "gender": "female"},
+            "antoni": {"voice_id": "pFZP5JQG7iQjIQuC4Gr", "engine": "elevenlabs", "language": "en-US", "gender": "male"},
+            "matilda": {"voice_id": "zrHiDhphv9ZnVXBqCLjz", "engine": "elevenlabs", "language": "en-US", "gender": "female"},
+            "james": {"voice_id": "ZQe5CZNOzWyzPSCn5a3c", "engine": "elevenlabs", "language": "en-US", "gender": "male"},
+            "sarah": {"voice_id": "EXAVITQu4vr4xnSDxMaL", "engine": "elevenlabs", "language": "en-US", "gender": "female"},
+            "bella": {"voice_id": "EXAVITQu4vr4xnSDxMaL", "engine": "elevenlabs", "language": "en-US", "gender": "female"},
+            "adam": {"voice_id": "pNInz6obpgDQGcFmaJgB", "engine": "elevenlabs", "language": "en-US", "gender": "male"},
+            "eve": {"voice_id": "MF3mGyEYCl7XYWbV9V6O", "engine": "elevenlabs", "language": "en-US", "gender": "female"},
+
+            # Azure Speech Service voices - English
+            "aria": {"voice_id": "en-US-AriaNeural", "engine": "azure", "language": "en-US", "gender": "female"},
+            "jenny": {"voice_id": "en-US-JennyNeural", "engine": "azure", "language": "en-US", "gender": "female"},
+            "guy": {"voice_id": "en-US-GuyNeural", "engine": "azure", "language": "en-US", "gender": "male"},
+            "davis": {"voice_id": "en-US-DavisNeural", "engine": "azure", "language": "en-US", "gender": "male"},
+            "sonia": {"voice_id": "en-GB-SoniaNeural", "engine": "azure", "language": "en-GB", "gender": "female"},
+            "ryan": {"voice_id": "en-GB-RyanNeural", "engine": "azure", "language": "en-GB", "gender": "male"},
+
+            # Azure Speech Service voices - German
+            "katja": {"voice_id": "de-DE-KatjaNeural", "engine": "azure", "language": "de-DE", "gender": "female"},
+            "conrad": {"voice_id": "de-DE-ConradNeural", "engine": "azure", "language": "de-DE", "gender": "male"},
+            "amala": {"voice_id": "de-DE-AmalaNeural", "engine": "azure", "language": "de-DE", "gender": "female"},
+
+            # Azure Speech Service voices - Spanish
+            "elvira": {"voice_id": "es-ES-ElviraNeural", "engine": "azure", "language": "es-ES", "gender": "female"},
+            "alvaro": {"voice_id": "es-ES-AlvaroNeural", "engine": "azure", "language": "es-ES", "gender": "male"},
+            "dalia": {"voice_id": "es-MX-DaliaNeural", "engine": "azure", "language": "es-MX", "gender": "female"},
+
+            # Azure Speech Service voices - French
+            "denise": {"voice_id": "fr-FR-DeniseNeural", "engine": "azure", "language": "fr-FR", "gender": "female"},
+            "henri": {"voice_id": "fr-FR-HenriNeural", "engine": "azure", "language": "fr-FR", "gender": "male"},
+            "brigitte": {"voice_id": "fr-FR-BrigitteNeural", "engine": "azure", "language": "fr-FR", "gender": "female"},
+
+            # Azure Speech Service voices - Italian
+            "elsa": {"voice_id": "it-IT-ElsaNeural", "engine": "azure", "language": "it-IT", "gender": "female"},
+            "isabella": {"voice_id": "it-IT-IsabellaNeural", "engine": "azure", "language": "it-IT", "gender": "female"},
+            "diego": {"voice_id": "it-IT-DiegoNeural", "engine": "azure", "language": "it-IT", "gender": "male"},
+        }
+
+    def _lookup_voice_by_name(self, voice_name: str, preferred_language: str = None, preferred_engine: str = None) -> tuple[str, str]:
+        """
+        Look up voice ID by name with optional language and engine preferences
+
+        Args:
+            voice_name: Name of the voice to look up
+            preferred_language: Preferred language code (e.g., 'en-US')
+            preferred_engine: Preferred engine ('elevenlabs' or 'azure')
+
+        Returns:
+            tuple: (voice_id, engine) or (voice_name, 'unknown') if not found
+        """
+        voice_name_lower = voice_name.lower().strip()
+
+        # Direct lookup
+        if voice_name_lower in self.voice_name_lookup:
+            voice_info = self.voice_name_lookup[voice_name_lower]
+            return voice_info["voice_id"], voice_info["engine"]
+
+        # Fuzzy matching - look for partial matches
+        matching_voices = []
+        for name, info in self.voice_name_lookup.items():
+            if voice_name_lower in name or name in voice_name_lower:
+                matching_voices.append((name, info))
+
+        if matching_voices:
+            # Apply preferences to select best match
+            best_match = None
+
+            # First preference: exact engine match
+            if preferred_engine:
+                for name, info in matching_voices:
+                    if info["engine"] == preferred_engine:
+                        best_match = info
+                        break
+
+            # Second preference: language match
+            if not best_match and preferred_language:
+                for name, info in matching_voices:
+                    if info["language"] == preferred_language:
+                        best_match = info
+                        break
+
+            # Fallback: first match
+            if not best_match:
+                best_match = matching_voices[0][1]
+
+            logger.info(f"Voice lookup: '{voice_name}' -> '{best_match['voice_id']}' ({best_match['engine']})")
+            return best_match["voice_id"], best_match["engine"]
+
+        # If no match found, log and return original name
+        logger.warning(f"Voice lookup failed for: '{voice_name}'. Using as-is.")
+        return voice_name, "unknown"
+
     def _get_cache_key(self, request: TTSRequest) -> str:
         """Generate cache key for TTS request"""
         key_parts = [
@@ -261,13 +358,23 @@ class TTSRouter:
         if request.voice_id:
             voice_id = request.voice_id
         elif request.voice_name:
-            # TODO: Look up voice ID by name
-            voice_id = request.voice_name
+            # Look up voice ID by name with preferences
+            voice_id, lookup_engine = self._lookup_voice_by_name(
+                request.voice_name,
+                preferred_language=request.language,
+                preferred_engine=engine
+            )
+
+            # If a specific engine was found during lookup and no engine was forced,
+            # use the engine that matches the voice
+            if not request.engine and lookup_engine != "unknown":
+                engine = lookup_engine
+
         else:
             # Use default voice for language
             lang_config = self.voice_mapping.get(request.language, self.voice_mapping["en-US"])
             voice_id = lang_config.get(engine, lang_config.get("elevenlabs"))
-            
+
         return engine, voice_id
         
     async def _synthesize_elevenlabs(self, request: TTSRequest, voice_id: str) -> tuple[str, float]:
@@ -480,35 +587,32 @@ async def synthesize_speech(request: TTSRequest):
 
 
 @app.get("/voices", response_model=List[VoiceInfo])
-async def list_voices(language: Optional[str] = None):
-    """List available voices"""
+async def list_voices(language: Optional[str] = None, engine: Optional[str] = None):
+    """List available voices with names"""
     voices = []
-    
-    # Add ElevenLabs voices
-    for lang, config in tts_router.voice_mapping.items():
-        if language and lang != language:
+
+    # Add voices from the name lookup table (more comprehensive)
+    for voice_name, voice_info in tts_router.voice_name_lookup.items():
+        # Filter by language if specified
+        if language and voice_info["language"] != language:
             continue
-            
-        if "elevenlabs" in config:
-            voices.append(VoiceInfo(
-                voice_id=config["elevenlabs"],
-                name=f"ElevenLabs {lang}",
-                language=lang,
-                gender="neutral",
-                preview_url=None,
-                engine="elevenlabs"
-            ))
-            
-        if "azure" in config:
-            voices.append(VoiceInfo(
-                voice_id=config["azure"],
-                name=config["azure"],
-                language=lang,
-                gender="female",
-                preview_url=None,
-                engine="azure"
-            ))
-            
+
+        # Filter by engine if specified
+        if engine and voice_info["engine"] != engine:
+            continue
+
+        voices.append(VoiceInfo(
+            voice_id=voice_info["voice_id"],
+            name=voice_name.title(),  # Capitalize name for display
+            language=voice_info["language"],
+            gender=voice_info.get("gender", "neutral"),
+            preview_url=None,
+            engine=voice_info["engine"]
+        ))
+
+    # Sort by engine, then language, then name for consistent ordering
+    voices.sort(key=lambda v: (v.engine, v.language, v.name))
+
     return voices
 
 

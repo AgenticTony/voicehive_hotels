@@ -274,14 +274,100 @@ class VoiceHiveAgent:
             )
             publication = await self.room.local_participant.publish_track(track, options)
             
-            # Send audio data
-            # TODO: Convert audio_data to appropriate format and send
-            
+            # Convert audio data to appropriate format and send
+            await self._send_audio_to_track(source, audio_data, sample_rate)
+
             logger.info("Published TTS audio to room")
             
         except Exception as e:
             logger.error(f"Error publishing audio: {e}")
-            
+
+    async def _send_audio_to_track(self, source: rtc.AudioSource, audio_data: bytes, sample_rate: int):
+        """Convert audio data to LiveKit frames and send to audio source"""
+        try:
+            import numpy as np
+
+            # Convert bytes to numpy array (assuming 16-bit PCM)
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+
+            # Calculate frame parameters
+            # LiveKit typically uses 10ms frames (480 samples at 48kHz, 160 samples at 16kHz)
+            frame_duration_ms = 10
+            samples_per_frame = int(sample_rate * frame_duration_ms / 1000)
+
+            # Ensure we have enough samples
+            if len(audio_array) == 0:
+                logger.warning("Empty audio data received")
+                return
+
+            # Handle sample rate conversion if needed
+            target_sample_rate = source.sample_rate
+            if sample_rate != target_sample_rate:
+                audio_array = await self._resample_audio(audio_array, sample_rate, target_sample_rate)
+                sample_rate = target_sample_rate
+                samples_per_frame = int(target_sample_rate * frame_duration_ms / 1000)
+
+            # Split audio into frames and send
+            num_frames = (len(audio_array) + samples_per_frame - 1) // samples_per_frame
+
+            for i in range(num_frames):
+                start_idx = i * samples_per_frame
+                end_idx = min((i + 1) * samples_per_frame, len(audio_array))
+
+                # Extract frame data
+                frame_data = audio_array[start_idx:end_idx]
+
+                # Pad frame if necessary (last frame might be shorter)
+                if len(frame_data) < samples_per_frame:
+                    frame_data = np.pad(frame_data, (0, samples_per_frame - len(frame_data)), 'constant')
+
+                # Create AudioFrame
+                # LiveKit expects planar format for multi-channel, but we're using mono
+                frame = rtc.AudioFrame(
+                    data=frame_data.tobytes(),
+                    sample_rate=sample_rate,
+                    num_channels=1,
+                    samples_per_channel=len(frame_data)
+                )
+
+                # Push frame to source
+                await source.capture_frame(frame)
+
+                # Small delay to simulate real-time playback
+                frame_duration_seconds = len(frame_data) / sample_rate
+                await asyncio.sleep(frame_duration_seconds)
+
+            logger.debug(f"Sent {num_frames} audio frames to track")
+
+        except Exception as e:
+            logger.error(f"Error sending audio to track: {e}")
+
+    async def _resample_audio(self, audio_array: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
+        """Simple audio resampling using linear interpolation"""
+        try:
+            import numpy as np
+
+            if source_rate == target_rate:
+                return audio_array
+
+            # Calculate resampling ratio
+            ratio = target_rate / source_rate
+
+            # Calculate new length
+            new_length = int(len(audio_array) * ratio)
+
+            # Create new sample indices
+            old_indices = np.linspace(0, len(audio_array) - 1, new_length)
+
+            # Interpolate
+            resampled = np.interp(old_indices, np.arange(len(audio_array)), audio_array.astype(float))
+
+            return resampled.astype(np.int16)
+
+        except Exception as e:
+            logger.error(f"Error resampling audio: {e}")
+            return audio_array  # Return original on error
+
     async def notify_orchestrator(self, event_type: str, data: Dict[str, Any]):
         """Send notifications to the orchestrator service"""
         try:
