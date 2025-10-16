@@ -454,6 +454,23 @@ def verify_webhook(source_name: str, security_manager: WebhookSecurityManager):
 
 
 # Common webhook source configurations
+def create_apaleo_webhook_source(name: str, secret: str) -> WebhookSource:
+    """Create Apaleo webhook source configuration"""
+    return WebhookSource(
+        name=name,
+        secret_key=secret,
+        signature_header="X-Apaleo-Signature",
+        timestamp_header="X-Apaleo-Timestamp",
+        signature_format="sha256={signature}",
+        ip_whitelist=[
+            "34.240.36.71",    # Apaleo outbound IPs
+            "52.212.76.75",
+            "63.33.249.221"
+        ],
+        user_agent_pattern=r"Apaleo-Webhook/.*"
+    )
+
+
 def create_github_webhook_source(name: str, secret: str) -> WebhookSource:
     """Create GitHub webhook source configuration"""
     return WebhookSource(

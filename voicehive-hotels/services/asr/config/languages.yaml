@@ -1,0 +1,390 @@
+# VoiceHive ASR Language Configuration
+# Support for 25 EU languages via NVIDIA Granary (Parakeet-tdt-0.6b-v3)
+# Plus global language support via Whisper fallback
+
+# NVIDIA Granary Languages (25 EU Languages - Premium Accuracy)
+granary_languages:
+  en-US:
+    name: "English (United States)"
+    iso_639_1: "en"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Primary business language"
+
+  en-GB:
+    name: "English (United Kingdom)"
+    iso_639_1: "en"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "UK hotel market"
+
+  de-DE:
+    name: "German"
+    iso_639_1: "de"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "DACH region hotels"
+
+  fr-FR:
+    name: "French"
+    iso_639_1: "fr"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "French and French-speaking markets"
+
+  es-ES:
+    name: "Spanish (Spain)"
+    iso_639_1: "es"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Spanish hotel market"
+
+  it-IT:
+    name: "Italian"
+    iso_639_1: "it"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Italian hotel market"
+
+  nl-NL:
+    name: "Dutch"
+    iso_639_1: "nl"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Netherlands hotel market"
+
+  sv-SE:
+    name: "Swedish"
+    iso_639_1: "sv"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Swedish hotel market"
+
+  da-DK:
+    name: "Danish"
+    iso_639_1: "da"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Danish hotel market"
+
+  no-NO:
+    name: "Norwegian"
+    iso_639_1: "no"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Norwegian hotel market"
+
+  pt-PT:
+    name: "Portuguese (Portugal)"
+    iso_639_1: "pt"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Portuguese hotel market"
+
+  ro-RO:
+    name: "Romanian"
+    iso_639_1: "ro"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Romanian hotel market"
+
+  ca-ES:
+    name: "Catalan"
+    iso_639_1: "ca"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Catalonia hotel market"
+
+  pl-PL:
+    name: "Polish"
+    iso_639_1: "pl"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Polish hotel market"
+
+  cs-CZ:
+    name: "Czech"
+    iso_639_1: "cs"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Czech hotel market"
+
+  sk-SK:
+    name: "Slovak"
+    iso_639_1: "sk"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Slovak hotel market"
+
+  hr-HR:
+    name: "Croatian"
+    iso_639_1: "hr"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Croatian hotel market"
+
+  sl-SI:
+    name: "Slovenian"
+    iso_639_1: "sl"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Slovenian hotel market"
+
+  bg-BG:
+    name: "Bulgarian"
+    iso_639_1: "bg"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Bulgarian hotel market"
+
+  fi-FI:
+    name: "Finnish"
+    iso_639_1: "fi"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Finnish hotel market"
+
+  hu-HU:
+    name: "Hungarian"
+    iso_639_1: "hu"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Hungarian hotel market"
+
+  et-EE:
+    name: "Estonian"
+    iso_639_1: "et"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Estonian hotel market"
+
+  lv-LV:
+    name: "Latvian"
+    iso_639_1: "lv"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Latvian hotel market"
+
+  lt-LT:
+    name: "Lithuanian"
+    iso_639_1: "lt"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Lithuanian hotel market"
+
+  el-GR:
+    name: "Greek"
+    iso_639_1: "el"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Greek hotel market"
+
+  mt-MT:
+    name: "Maltese"
+    iso_639_1: "mt"
+    accuracy: "premium"
+    latency: "low"
+    use_case: "Maltese hotel market"
+
+# Whisper Global Languages (Fallback for non-EU languages)
+whisper_languages:
+  ar-SA:
+    name: "Arabic (Saudi Arabia)"
+    iso_639_1: "ar"
+    accuracy: "good"
+    latency: "medium"
+    use_case: "Middle East hotel markets"
+
+  zh-CN:
+    name: "Chinese (Simplified)"
+    iso_639_1: "zh"
+    accuracy: "good"
+    latency: "medium"
+    use_case: "Chinese tourist markets"
+
+  zh-TW:
+    name: "Chinese (Traditional)"
+    iso_639_1: "zh"
+    accuracy: "good"
+    latency: "medium"
+    use_case: "Taiwan and Hong Kong markets"
+
+  ja-JP:
+    name: "Japanese"
+    iso_639_1: "ja"
+    accuracy: "good"
+    latency: "medium"
+    use_case: "Japanese tourist markets"
+
+  ko-KR:
+    name: "Korean"
+    iso_639_1: "ko"
+    accuracy: "good"
+    latency: "medium"
+    use_case: "Korean tourist markets"
+
+  hi-IN:
+    name: "Hindi"
+    iso_639_1: "hi"
+    accuracy: "good"
+    latency: "medium"
+    use_case: "Indian tourist markets"
+
+  th-TH:
+    name: "Thai"
+    iso_639_1: "th"
+    accuracy: "good"
+    latency: "medium"
+    use_case: "Thai hotel markets"
+
+  vi-VN:
+    name: "Vietnamese"
+    iso_639_1: "vi"
+    accuracy: "good"
+    latency: "medium"
+    use_case: "Vietnamese markets"
+
+  ru-RU:
+    name: "Russian"
+    iso_639_1: "ru"
+    accuracy: "good"
+    latency: "medium"
+    use_case: "Russian tourist markets"
+
+  tr-TR:
+    name: "Turkish"
+    iso_639_1: "tr"
+    accuracy: "good"
+    latency: "medium"
+    use_case: "Turkish hotel markets"
+
+# ASR Engine Configuration
+engines:
+  granary:
+    name: "NVIDIA Granary (Parakeet-tdt-0.6b-v3)"
+    model_path: "nvidia/parakeet-tdt-0.6b-v3"
+    supported_languages: "granary_languages"
+    features:
+      - "Premium accuracy for EU languages"
+      - "Word-level timestamps"
+      - "Punctuation and capitalization"
+      - "Speaker diarization ready"
+      - "Low latency (<500ms)"
+    performance:
+      accuracy: ">95%"
+      latency: "<500ms"
+      throughput: "20 concurrent streams"
+      gpu_required: true
+
+  whisper:
+    name: "OpenAI Whisper"
+    model_path: "openai/whisper-large-v3"
+    supported_languages: "whisper_languages"
+    features:
+      - "Global language coverage"
+      - "Good accuracy for most languages"
+      - "Automatic language detection"
+      - "Robust to noise"
+    performance:
+      accuracy: "85-90%"
+      latency: "<2s"
+      throughput: "50 concurrent streams"
+      gpu_required: false
+
+  riva:
+    name: "NVIDIA Riva (Legacy)"
+    model_path: "nvidia/riva-speech"
+    supported_languages: ["en-US", "en-GB", "de-DE", "es-ES", "fr-FR", "it-IT"]
+    features:
+      - "Legacy fallback support"
+      - "Streaming capability"
+      - "Proven stability"
+    performance:
+      accuracy: "85-92%"
+      latency: "<800ms"
+      throughput: "25 concurrent streams"
+      gpu_required: true
+    status: "deprecated"
+
+# Routing Configuration
+routing:
+  strategy: "hybrid"
+  rules:
+    - condition: "language in granary_languages"
+      action: "route_to_granary"
+      reason: "Premium accuracy for EU languages"
+
+    - condition: "language in whisper_languages"
+      action: "route_to_whisper"
+      reason: "Global language support"
+
+    - condition: "language unknown and prefer_accuracy=true"
+      action: "route_to_granary"
+      reason: "Unknown language with accuracy preference"
+
+    - condition: "language unknown and prefer_accuracy=false"
+      action: "route_to_whisper"
+      reason: "Unknown language with speed preference"
+
+  fallback:
+    enabled: true
+    chain: ["primary", "secondary", "riva"]
+    timeout_seconds: 30
+
+# Performance Targets (Sprint 3 Requirements)
+performance_targets:
+  latency:
+    granary_eu_languages: "<500ms"
+    whisper_global: "<2s"
+    overall_p95: "<1s"
+
+  accuracy:
+    granary_eu_languages: ">95%"
+    whisper_global: ">85%"
+    overall_average: ">90%"
+
+  throughput:
+    concurrent_requests: "500+"
+    requests_per_second: "100+"
+
+  availability:
+    service_uptime: "99.9%"
+    failover_time: "<5s"
+
+# Language Detection Configuration
+language_detection:
+  default_engine: "granary"
+  fallback_engine: "whisper"
+  confidence_threshold: 0.7
+  sample_duration_seconds: 5
+
+# Monitoring and Alerting
+monitoring:
+  metrics:
+    - "asr_requests_total"
+    - "asr_request_duration_seconds"
+    - "asr_engine_selection_total"
+    - "asr_fallback_events_total"
+    - "asr_language_distribution"
+
+  alerts:
+    - name: "ASR Engine Down"
+      condition: "engine_availability < 0.5"
+      severity: "critical"
+
+    - name: "High Latency"
+      condition: "p95_latency > 2s"
+      severity: "warning"
+
+    - name: "Low Accuracy"
+      condition: "accuracy < 80%"
+      severity: "warning"
+
+# Sprint 3 Completion Criteria
+completion_criteria:
+  - "25 EU languages supported via Granary"
+  - "Hybrid routing operational"
+  - "Performance targets met"
+  - "Fallback mechanisms working"
+  - "Monitoring and alerting configured"
+  - "Documentation updated"

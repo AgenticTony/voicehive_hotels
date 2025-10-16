@@ -1,0 +1,255 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: granary-asr-proxy
+  labels:
+    app: granary-asr-proxy
+    component: asr
+    engine: granary
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: granary-asr-proxy
+  template:
+    metadata:
+      labels:
+        app: granary-asr-proxy
+        version: blue
+        engine: granary
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: voicehive-granary-asr-proxy
+      affinity:
+        # Must run on GPU nodes for NeMo model acceleration
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values:
+                - g4dn.xlarge
+                - g4dn.2xlarge
+                - g4dn.4xlarge
+                - p3.2xlarge
+                - g5.xlarge
+                - g5.2xlarge
+              - key: topology.kubernetes.io/zone
+                operator: In
+                values:
+                - eu-west-1a
+                - eu-west-1b
+                - eu-west-1c
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - granary-asr-proxy
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      initContainers:
+      - name: model-downloader
+        image: voicehive/nemo-model-downloader:latest
+        env:
+        - name: MODEL_NAME
+          value: "nvidia/parakeet-tdt-0.6b-v3"
+        - name: CACHE_DIR
+          value: "/models"
+        volumeMounts:
+        - name: models
+          mountPath: /models
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+      containers:
+      - name: granary-asr-proxy
+        image: voicehive/granary-asr-proxy:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 51052
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: AWS_REGION
+          value: "eu-west-1"
+        - name: GRANARY_MODEL_NAME
+          value: "nvidia/parakeet-tdt-0.6b-v3"
+        - name: GRANARY_CACHE_DIR
+          value: "/models"
+        - name: GRANARY_DEVICE
+          value: "cuda"
+        - name: GRANARY_BATCH_SIZE
+          value: "2"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /.cache
+        - name: models
+          mountPath: /models
+          readOnly: true
+        - name: shm
+          mountPath: /dev/shm
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2000m"
+            nvidia.com/gpu: 1
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
+            nvidia.com/gpu: 1
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 120  # Longer for model loading
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 20  # Allow up to 200 seconds for model loading
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - SYS_NICE  # For GPU access
+          readOnlyRootFilesystem: true
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir: {}
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 4Gi  # Larger for NeMo models
+      - name: models
+        persistentVolumeClaim:
+          claimName: granary-models-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: granary-asr-proxy
+  labels:
+    app: granary-asr-proxy
+    engine: granary
+spec:
+  type: ClusterIP
+  ports:
+  - port: 51052
+    targetPort: http
+    protocol: TCP
+    name: http
+  - port: 9090
+    targetPort: metrics
+    protocol: TCP
+    name: metrics
+  selector:
+    app: granary-asr-proxy
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: voicehive-granary-asr-proxy
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/voicehive-granary-asr-proxy
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: granary-models-pvc
+spec:
+  accessModes:
+  - ReadWriteOnce  # NeMo models can be larger
+  storageClassName: gp3-encrypted
+  resources:
+    requests:
+      storage: 200Gi  # Larger for Parakeet-tdt model
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: granary-asr-proxy-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: granary-asr-proxy
+  minReplicas: 2
+  maxReplicas: 8  # Lower max due to GPU constraints
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Pods
+    pods:
+      metric:
+        name: granary_asr_active_streams
+      target:
+        type: AverageValue
+        averageValue: "20"  # Lower due to higher per-request cost
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600  # Longer due to model loading time
+      policies:
+      - type: Percent
+        value: 25  # More conservative scaling
+        periodSeconds: 120
+    scaleUp:
+      stabilizationWindowSeconds: 120
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 120
+      - type: Pods
+        value: 1
+        periodSeconds: 120

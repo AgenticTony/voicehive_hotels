@@ -44,7 +44,7 @@ class ApaleoConnector(BaseConnector):
         Capabilities.WEBHOOKS.value: True,
         Capabilities.REAL_TIME_SYNC.value: True,
         Capabilities.MULTI_PROPERTY.value: True,
-        Capabilities.PAYMENT_PROCESSING.value: False,
+        Capabilities.PAYMENT_PROCESSING.value: True,
         Capabilities.HOUSEKEEPING.value: True,
         Capabilities.POS_INTEGRATION.value: False,
     }
@@ -95,7 +95,7 @@ class ApaleoConnector(BaseConnector):
                     "grant_type": "client_credentials",
                     "client_id": self.client_id,
                     "client_secret": self.client_secret,
-                    "scope": "availability.read rateplan.read booking.read booking.write distribution:reservations.manage",
+                    "scope": "availability.read rateplan.read booking.read booking.write distribution:reservations.manage webhook:manage payment:read payment:write pay:payment",
                 },
             )
             response.raise_for_status()
@@ -921,3 +921,341 @@ class ApaleoConnector(BaseConnector):
                     rate_code=rate_code
                 )
             return "Free cancellation until 6 PM on arrival day"
+
+    # Apaleo Pay Integration Methods (Sprint 3 Enhancement)
+    async def create_payment_account(self, guest_profile: GuestProfile, payment_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create payment account for guest using Apaleo Pay"""
+        try:
+            payment_account_data = {
+                "accountNumber": payment_data.get("card_number"),
+                "accountHolder": f"{guest_profile.first_name} {guest_profile.last_name}",
+                "expiryMonth": payment_data.get("expiry_month"),
+                "expiryYear": payment_data.get("expiry_year"),
+                "paymentMethod": payment_data.get("payment_method", "visa"),
+                "payerEmail": guest_profile.email,
+                "payerReference": payment_data.get("payer_reference"),
+                "isVirtual": payment_data.get("is_virtual", False)
+            }
+
+            # Create payment account via Apaleo Pay API
+            result = await self._request(
+                "POST",
+                "/pay/v1/payment-accounts",
+                json=payment_account_data
+            )
+
+            if hasattr(self.logger, "info"):
+                self.logger.info(
+                    "apaleo_payment_account_created",
+                    account_id=result.get("id"),
+                    payer_email=guest_profile.email
+                )
+
+            return result
+
+        except Exception as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("apaleo_payment_account_creation_error", error=str(e))
+            raise PMSError(f"Failed to create payment account: {e}")
+
+    async def authorize_payment(self, reservation_id: str, amount: Decimal, currency: str = "EUR") -> Dict[str, Any]:
+        """Authorize payment for reservation using Apaleo Pay"""
+        try:
+            authorization_data = {
+                "reservationId": reservation_id,
+                "amount": {
+                    "amount": float(amount),
+                    "currency": currency
+                },
+                "description": f"Authorization for reservation {reservation_id}"
+            }
+
+            result = await self._request(
+                "POST",
+                "/pay/v1/payments/authorize",
+                json=authorization_data
+            )
+
+            if hasattr(self.logger, "info"):
+                self.logger.info(
+                    "apaleo_payment_authorized",
+                    reservation_id=reservation_id,
+                    amount=amount,
+                    currency=currency,
+                    transaction_id=result.get("transactionId")
+                )
+
+            return result
+
+        except Exception as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("apaleo_payment_authorization_error",
+                            reservation_id=reservation_id, error=str(e))
+            raise PMSError(f"Failed to authorize payment: {e}")
+
+    async def capture_payment(self, transaction_id: str, amount: Optional[Decimal] = None) -> Dict[str, Any]:
+        """Capture previously authorized payment"""
+        try:
+            capture_data = {}
+            if amount is not None:
+                capture_data["amount"] = {
+                    "amount": float(amount),
+                    "currency": "EUR"  # Default currency
+                }
+
+            result = await self._request(
+                "POST",
+                f"/pay/v1/payments/{transaction_id}/capture",
+                json=capture_data
+            )
+
+            if hasattr(self.logger, "info"):
+                self.logger.info(
+                    "apaleo_payment_captured",
+                    transaction_id=transaction_id,
+                    captured_amount=amount
+                )
+
+            return result
+
+        except Exception as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("apaleo_payment_capture_error",
+                            transaction_id=transaction_id, error=str(e))
+            raise PMSError(f"Failed to capture payment: {e}")
+
+    async def refund_payment(self, transaction_id: str, amount: Decimal, reason: str = "Guest request") -> Dict[str, Any]:
+        """Process refund for payment"""
+        try:
+            refund_data = {
+                "amount": {
+                    "amount": float(amount),
+                    "currency": "EUR"
+                },
+                "reason": reason
+            }
+
+            result = await self._request(
+                "POST",
+                f"/pay/v1/payments/{transaction_id}/refund",
+                json=refund_data
+            )
+
+            if hasattr(self.logger, "info"):
+                self.logger.info(
+                    "apaleo_payment_refunded",
+                    transaction_id=transaction_id,
+                    refund_amount=amount,
+                    reason=reason
+                )
+
+            return result
+
+        except Exception as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("apaleo_payment_refund_error",
+                            transaction_id=transaction_id, error=str(e))
+            raise PMSError(f"Failed to process refund: {e}")
+
+    async def get_payment_status(self, transaction_id: str) -> Dict[str, Any]:
+        """Get payment transaction status"""
+        try:
+            result = await self._request(
+                "GET",
+                f"/pay/v1/payments/{transaction_id}"
+            )
+
+            return result
+
+        except Exception as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("apaleo_payment_status_error",
+                            transaction_id=transaction_id, error=str(e))
+            raise PMSError(f"Failed to get payment status: {e}")
+
+    async def list_payment_transactions(self, reservation_id: Optional[str] = None,
+                                      property_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List payment transactions with optional filters"""
+        try:
+            params = {}
+            if reservation_id:
+                params["reservationId"] = reservation_id
+            if property_id:
+                params["propertyId"] = property_id
+            elif self.property_id:
+                params["propertyId"] = self.property_id
+
+            result = await self._request(
+                "GET",
+                "/pay/v1/payments",
+                params=params
+            )
+
+            return result.get("payments", [])
+
+        except Exception as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("apaleo_payment_list_error", error=str(e))
+            raise PMSError(f"Failed to list payment transactions: {e}")
+
+    async def create_booking_with_payment(self, payload: ReservationDraft,
+                                        payment_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create booking with payment processing (Apaleo Pay integration)"""
+        try:
+            property_id = payload.hotel_id or self.property_id
+
+            # Enhanced booking data with payment account
+            booking_data = {
+                "paymentAccount": {
+                    "accountNumber": payment_data.get("card_number"),
+                    "accountHolder": f"{payload.guest.first_name} {payload.guest.last_name}",
+                    "expiryMonth": payment_data.get("expiry_month"),
+                    "expiryYear": payment_data.get("expiry_year"),
+                    "paymentMethod": payment_data.get("payment_method", "visa"),
+                    "payerEmail": payload.guest.email,
+                    "payerReference": payment_data.get("payer_reference"),
+                    "isVirtual": payment_data.get("is_virtual", False)
+                },
+                "booker": {
+                    "title": "Mr",  # Default or derive from guest data
+                    "firstName": payload.guest.first_name,
+                    "lastName": payload.guest.last_name,
+                    "email": payload.guest.email,
+                    "phone": payload.guest.phone,
+                    "address": {
+                        "addressLine1": "Unknown",  # Would need address in GuestProfile
+                        "postalCode": "00000",
+                        "city": "Unknown",
+                        "countryCode": payload.guest.nationality or "US"
+                    }
+                },
+                "comment": payload.special_requests,
+                "channelCode": "VoiceHive",
+                "source": "Voice Assistant",
+                "reservations": [
+                    {
+                        "propertyId": property_id,
+                        "arrival": payload.arrival.isoformat(),
+                        "departure": payload.departure.isoformat(),
+                        "adults": payload.guest_count,
+                        "primaryGuest": {
+                            "title": "Mr",
+                            "firstName": payload.guest.first_name,
+                            "lastName": payload.guest.last_name,
+                            "email": payload.guest.email,
+                            "phone": payload.guest.phone,
+                            "address": {
+                                "addressLine1": "Unknown",
+                                "postalCode": "00000",
+                                "city": "Unknown",
+                                "countryCode": payload.guest.nationality or "US"
+                            }
+                        },
+                        "timeSlices": [
+                            {
+                                "ratePlanId": payload.rate_code
+                            }
+                        ],
+                        "guaranteeType": payment_data.get("guarantee_type", "CreditCard"),
+                        "prePaymentAmount": {
+                            "amount": float(payment_data.get("prepayment_amount", 0)),
+                            "currency": "EUR"
+                        } if payment_data.get("prepayment_amount") else None
+                    }
+                ],
+                "transactionReference": payment_data.get("transaction_reference")
+            }
+
+            # Remove None values from prePaymentAmount
+            if booking_data["reservations"][0]["prePaymentAmount"] is None:
+                del booking_data["reservations"][0]["prePaymentAmount"]
+
+            # Create booking with payment via secure distribution endpoint
+            result = await self._request(
+                "POST",
+                "/distribution/v1/bookings",
+                json=booking_data
+            )
+
+            if hasattr(self.logger, "info"):
+                self.logger.info(
+                    "apaleo_booking_with_payment_created",
+                    booking_id=result.get("id"),
+                    transaction_reference=payment_data.get("transaction_reference"),
+                    property_id=property_id
+                )
+
+            return result
+
+        except Exception as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("apaleo_booking_with_payment_error", error=str(e))
+            raise PMSError(f"Failed to create booking with payment: {e}")
+
+    async def handle_payment_webhook(self, webhook_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle payment-related webhook events from Apaleo Pay"""
+        try:
+            event_type = webhook_data.get("type")
+            transaction_id = webhook_data.get("data", {}).get("transactionId")
+
+            if hasattr(self.logger, "info"):
+                self.logger.info(
+                    "apaleo_payment_webhook_received",
+                    event_type=event_type,
+                    transaction_id=transaction_id
+                )
+
+            # Process different payment events
+            if event_type == "authorized":
+                return await self._handle_payment_authorized(webhook_data)
+            elif event_type == "captured":
+                return await self._handle_payment_captured(webhook_data)
+            elif event_type == "failed":
+                return await self._handle_payment_failed(webhook_data)
+            elif event_type == "refunded":
+                return await self._handle_payment_refunded(webhook_data)
+            else:
+                if hasattr(self.logger, "warning"):
+                    self.logger.warning("unknown_payment_webhook_type", event_type=event_type)
+                return {"status": "ignored", "reason": f"Unknown event type: {event_type}"}
+
+        except Exception as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("apaleo_payment_webhook_error", error=str(e))
+            raise PMSError(f"Failed to handle payment webhook: {e}")
+
+    async def _handle_payment_authorized(self, webhook_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle payment authorization webhook"""
+        transaction_id = webhook_data.get("data", {}).get("transactionId")
+        if hasattr(self.logger, "info"):
+            self.logger.info("payment_authorized_webhook", transaction_id=transaction_id)
+
+        # TODO: Update local payment status, notify guest, etc.
+        return {"status": "processed", "event": "payment_authorized"}
+
+    async def _handle_payment_captured(self, webhook_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle payment capture webhook"""
+        transaction_id = webhook_data.get("data", {}).get("transactionId")
+        if hasattr(self.logger, "info"):
+            self.logger.info("payment_captured_webhook", transaction_id=transaction_id)
+
+        # TODO: Update local payment status, send confirmation, etc.
+        return {"status": "processed", "event": "payment_captured"}
+
+    async def _handle_payment_failed(self, webhook_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle payment failure webhook"""
+        transaction_id = webhook_data.get("data", {}).get("transactionId")
+        if hasattr(self.logger, "info"):
+            self.logger.info("payment_failed_webhook", transaction_id=transaction_id)
+
+        # TODO: Handle payment failure, notify guest, cancel reservation if needed
+        return {"status": "processed", "event": "payment_failed"}
+
+    async def _handle_payment_refunded(self, webhook_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle payment refund webhook"""
+        transaction_id = webhook_data.get("data", {}).get("transactionId")
+        if hasattr(self.logger, "info"):
+            self.logger.info("payment_refunded_webhook", transaction_id=transaction_id)
+
+        # TODO: Update local payment status, notify guest of refund
+        return {"status": "processed", "event": "payment_refunded"}
