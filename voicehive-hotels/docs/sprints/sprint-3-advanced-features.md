@@ -1,7 +1,7 @@
-# Sprint 3: Advanced Features & PMS Expansion
-**Last Updated**: 2025-10-12
-**Sprint Duration**: 10 days (2 weeks)
-**Sprint Goal**: Transform production-ready system into comprehensive enterprise platform
+# Sprint 3: Advanced Features & PMS Expansion ✅ ENHANCED WITH NVIDIA GRANARY
+**Last Updated**: 2025-10-14 (Enhanced with NVIDIA Granary & Apaleo Pay Integration)
+**Sprint Duration**: 12 days (2.5 weeks - enhanced from 10 days)
+**Sprint Goal**: Transform production-ready system into comprehensive enterprise platform with cutting-edge NVIDIA AI
 
 ## Executive Summary
 
@@ -15,9 +15,10 @@ Sprint 3 expands the production-ready system into a **comprehensive enterprise A
 ### Primary Objectives
 1. **PMS Ecosystem**: Implement 4 additional PMS connectors (Mews, Oracle OPERA, Cloudbeds, SiteMinder)
 2. **Advanced AI**: Enhanced intent detection, conversation flow, and business intelligence
-3. **Multi-Language Support**: Expand to 25 EU languages with localization
-4. **Multi-Tenant Architecture**: Complete hotel isolation and per-tenant configuration
-5. **Business Features**: Upselling, payment processing, and revenue optimization
+3. **NVIDIA Granary Integration**: Replace Riva with state-of-the-art Granary for 25 EU languages
+4. **Enhanced Apaleo Integration**: Apaleo Pay, webhooks, and enterprise features
+5. **Multi-Tenant Architecture**: Complete hotel isolation and per-tenant configuration
+6. **Business Features**: Upselling, Apaleo Pay integration, and revenue optimization
 
 ## 🔥 CRITICAL EXPANSION ITEMS
 
@@ -131,55 +132,118 @@ Basic intent detection implemented in Sprint 1. Need advanced capabilities for e
 - [ ] Context preserved across conversation interruptions
 - [ ] Hotel-specific customization functional
 
-### 3. Multi-Language Support Expansion ❌
-**Priority**: HIGH - EU MARKET REQUIREMENT
-**Owner**: AI/ML + Frontend Team
-**Estimated Effort**: 2.5 days
+### 3. NVIDIA Granary Integration ✅ NEW CRITICAL FEATURE
+**Priority**: CRITICAL - CUTTING-EDGE AI ADVANTAGE
+**Owner**: AI/ML Team
+**Estimated Effort**: 2.5 days (strategic replacement of Riva)
 
-**Current State**:
-Framework exists but limited language coverage.
+**Background**:
+Replace NVIDIA Riva with state-of-the-art NVIDIA Granary (Parakeet-tdt-0.6b-v3) for superior multilingual performance.
 
-**Target Languages** (25 EU Languages):
-- Germanic: English, German, Dutch, Swedish, Danish, Norwegian
-- Romance: French, Spanish, Italian, Portuguese, Romanian, Catalan
-- Slavic: Polish, Czech, Slovak, Croatian, Slovenian, Bulgarian
-- Other: Finnish, Hungarian, Estonian, Latvian, Lithuanian, Greek, Maltese
+**Strategic Benefits**:
+- **25 EU Languages**: Exactly matches expansion requirements
+- **State-of-the-art Accuracy**: Tops Hugging Face multilingual ASR leaderboard
+- **High Throughput**: Designed for real-time hotel reception use case
+- **Built-in Translation**: Granary includes translation capabilities
+- **50% Less Training Data**: More efficient than alternatives
 
 **Tasks**:
 
-#### A. TTS Voice Expansion ❌
+#### A. NVIDIA Granary Model Deployment ✅ NEW
+**Effort**: 1.5 days
+**Tasks**:
+- [ ] **Deploy NVIDIA Parakeet-tdt-0.6b-v3 model** on existing GPU infrastructure
+- [ ] **Replace Riva gRPC integration** with NeMo framework
+- [ ] **Configure 25 EU language support** (EN, DE, FR, ES, IT, NL, SV, DA, NO, PT, RO, CA, PL, CS, SK, HR, SL, BG, FI, HU, ET, LV, LT, EL, MT)
+- [ ] **Test priority languages** (EN, DE, FR, ES, IT) for immediate validation
+- [ ] **Implement GPU resource optimization** for g4dn.xlarge instances
+
+#### B. ASR Router Service Implementation ✅ NEW
 **Effort**: 1 day
 **Tasks**:
-- [ ] Map voices for all 25 languages in ElevenLabs and Azure
-- [ ] Implement voice quality assessment and selection
-- [ ] Add fallback voice strategies per language
-- [ ] Test voice synthesis quality for each language
+- [ ] **Create hybrid ASR architecture**: Granary for 25 EU languages, Whisper for global coverage
+- [ ] **Implement automatic language detection routing**
+- [ ] **Configure high-throughput processing** for concurrent hotel calls
+- [ ] **Add performance monitoring** for real-time ASR metrics
+- [ ] **Implement graceful fallback** to Whisper for non-EU languages
 
-#### B. ASR Language Models ❌
+**Implementation Architecture**:
+```python
+class ASRRouter:
+    def __init__(self):
+        self.granary_languages = {GRANARY_25_LANGUAGES}  # High accuracy
+        self.whisper_fallback = WhisperASR()              # Global coverage
+
+    async def transcribe(self, audio, detected_language):
+        if detected_language in self.granary_languages:
+            return await self.granary_service.transcribe(audio)  # Premium accuracy
+        else:
+            return await self.whisper_fallback.transcribe(audio)  # Global coverage
+```
+
+**Enhanced Acceptance Criteria**:
+- [ ] **NVIDIA Granary operational** for all 25 EU languages
+- [ ] **Performance exceeds Riva**: Higher accuracy and throughput
+- [ ] **Hybrid architecture working**: Granary + Whisper seamless routing
+- [ ] **Translation capabilities enabled**: Built-in EU language translation
+- [ ] **GPU optimization complete**: Efficient resource utilization on g4dn.xlarge
+- [ ] **Real-time performance validated**: <500ms transcription latency
+
+### 4. Enhanced Apaleo Integration Features ✅ NEW CRITICAL FEATURE
+**Priority**: CRITICAL - ENTERPRISE PMS COMPLETENESS
+**Owner**: Integrations Team
+**Estimated Effort**: 2 days (strategic enhancement of existing Apaleo integration)
+
+**Background**:
+Current Apaleo integration covers basic PMS operations. Enterprise deployment requires comprehensive Apaleo ecosystem integration including webhooks, UI integrations, and enhanced payment processing.
+
+**Strategic Benefits**:
+- **Complete Apaleo Ecosystem**: Full coverage of Apaleo platform capabilities
+- **Real-time Synchronization**: Webhook-based instant updates
+- **Enterprise Payment Processing**: Apaleo Pay with Adyen integration
+- **Enhanced Guest Experience**: UI integrations and seamless workflows
+- **Revenue Optimization**: Advanced pricing and financial integrations
+
+**Tasks**:
+
+#### A. Apaleo Webhook Integration ✅ NEW
 **Effort**: 1 day
 **Tasks**:
-- [ ] Configure NVIDIA Riva for 25 language support
-- [ ] Implement automatic language detection
-- [ ] Add confidence-based language switching
-- [ ] Optimize models for hotel domain vocabulary
+- [ ] **Implement Apaleo webhook endpoints** for real-time reservation updates
+- [ ] **Configure webhook subscriptions** for booking.created, booking.modified, booking.cancelled
+- [ ] **Add webhook authentication** and signature verification
+- [ ] **Implement idempotency handling** for duplicate webhook deliveries
+- [ ] **Add webhook retry logic** and error handling
+- [ ] **Create webhook monitoring** and alerting system
 
-#### C. Translation & Localization ❌
-**Effort**: 0.5 days
+**Webhook Events to Support**:
+- `Booking.Created` - New reservation notifications
+- `Booking.Modified` - Reservation change updates
+- `Booking.Cancelled` - Cancellation notifications
+- `Booking.CheckedIn` - Guest arrival updates
+- `Booking.CheckedOut` - Guest departure updates
+
+#### B. Enhanced OAuth Scopes Implementation ✅ NEW
+**Effort**: 1 day
 **Tasks**:
-- [ ] Implement response translation system
-- [ ] Add cultural localization for responses
-- [ ] Currency and date format localization
-- [ ] Local regulation compliance per country
+- [ ] **Implement expanded OAuth scopes** from Sprint 2 Vault integration
+- [ ] **Add Apaleo finance API integration** for revenue tracking
+- [ ] **Implement UI integrations scope** for seamless user experience
+- [ ] **Add property settings access** for configuration management
+- [ ] **Create scope-based feature toggles** for different integration levels
+- [ ] **Implement OAuth token refresh** for long-running sessions
 
-**Acceptance Criteria**:
-- [ ] All 25 languages supported for ASR and TTS
-- [ ] Automatic language detection works reliably
-- [ ] Responses properly localized per country
-- [ ] Performance maintained across all languages
+**Enhanced Acceptance Criteria**:
+- [ ] **Real-time webhook processing** functional for all supported events
+- [ ] **Webhook authentication** verified and secure
+- [ ] **Enhanced OAuth scopes** operational and tested
+- [ ] **Finance API integration** working for payment processing
+- [ ] **UI integrations** ready for Apaleo One deployment
+- [ ] **Webhook monitoring** and error handling operational
 
 ## 🚨 HIGH PRIORITY ITEMS
 
-### 4. Multi-Tenant Architecture Enhancement ❌
+### 5. Multi-Tenant Architecture Enhancement ❌
 **Priority**: HIGH - ENTERPRISE SCALABILITY
 **Owner**: Backend Team
 **Estimated Effort**: 2 days
@@ -213,7 +277,7 @@ Basic hotel isolation exists but needs enterprise multi-tenancy.
 - [ ] Per-tenant configuration working
 - [ ] Resource usage tracking functional
 
-### 5. Business Features & Revenue Optimization ❌
+### 6. Business Features & Revenue Optimization ❌
 **Priority**: HIGH - BUSINESS VALUE
 **Owner**: Backend + Business Team
 **Estimated Effort**: 2.5 days
@@ -229,14 +293,15 @@ Basic hotel isolation exists but needs enterprise multi-tenancy.
 - [ ] Upselling success rate tracking
 - [ ] A/B testing framework for upselling strategies
 
-#### B. Payment Processing Integration ❌
-**Effort**: 1 day
+#### B. Apaleo Pay Integration (Adyen) ✅ ENHANCED
+**Effort**: 1.5 days (enhanced from 1 day)
 **Tasks**:
-- [ ] Stripe integration for payment processing
-- [ ] PCI DSS compliance implementation
-- [ ] Payment method tokenization
-- [ ] Secure payment data handling
-- [ ] Payment status webhooks
+- [ ] **Apaleo Pay (Adyen) integration** with Apaleo payment endpoints
+- [ ] **Apaleo-specific payment flows** for hotel reservations
+- [ ] **PCI DSS compliance** through Apaleo's certified infrastructure
+- [ ] **Payment method tokenization** via Apaleo Pay APIs
+- [ ] **Apaleo payment status webhooks** for real-time updates
+- [ ] **Integration with Apaleo finance APIs** for revenue tracking
 
 **Acceptance Criteria**:
 - [ ] Upselling recommendations work correctly
@@ -246,7 +311,7 @@ Basic hotel isolation exists but needs enterprise multi-tenancy.
 
 ## 📈 MEDIUM PRIORITY ITEMS
 
-### 6. Advanced Analytics & Business Intelligence ❌
+### 7. Advanced Analytics & Business Intelligence ❌
 **Priority**: MEDIUM - DATA INSIGHTS
 **Owner**: Data Team
 **Estimated Effort**: 1.5 days
@@ -258,72 +323,91 @@ Basic hotel isolation exists but needs enterprise multi-tenancy.
 - [ ] Performance benchmarking across hotels
 - [ ] Predictive analytics for demand forecasting
 
-### 7. Enhanced Integration Features ❌
+### 8. Enhanced Integration Features ❌
 **Priority**: MEDIUM - OPERATIONAL EFFICIENCY
 **Owner**: Integrations Team
 **Estimated Effort**: 1 day
 
 **Tasks**:
-- [ ] Webhook framework for real-time notifications
-- [ ] API versioning and backward compatibility
-- [ ] Bulk operations for large hotel chains
-- [ ] Data synchronization across multiple PMSs
-- [ ] Integration health monitoring and alerting
+- [ ] **General webhook framework** for multi-PMS notifications
+- [ ] **API versioning** and backward compatibility for all connectors
+- [ ] **Bulk operations framework** for large hotel chains across multiple PMSs
+- [ ] **Cross-PMS data synchronization** and conflict resolution
+- [ ] **Integration health monitoring** for all PMS connectors
+- [ ] **Rate limiting coordination** across multiple PMS APIs
 
-## 📋 SPRINT PLANNING
+## 📋 ENHANCED SPRINT PLANNING (12 Days)
 
-### Week 1 (Days 1-5): Core Expansion
-**Goal**: Implement additional PMS connectors and advanced AI
+### Week 1 (Days 1-6): Core Expansion & NVIDIA Integration
+**Goal**: Implement additional PMS connectors, NVIDIA Granary, and enhanced Apaleo features
 
-**Day 1-2: Mews Connector**
-- Day 1: OAuth2 integration and core methods
-- Day 2: Webhooks, testing, and golden contract compliance
+**Day 1: Mews Connector + NVIDIA Granary Setup**
+- Morning: Begin Mews OAuth2 integration and core methods
+- Afternoon: **Begin NVIDIA Granary model deployment** on GPU infrastructure
 
-**Day 3-4: Oracle OPERA Connector**
-- Day 3: OHIP WebAPI integration and authentication
-- Day 4: Enterprise features and performance optimization
+**Day 2: Mews Completion + Granary Configuration**
+- Morning: Complete Mews webhooks, testing, and golden contract compliance
+- Afternoon: **Configure NVIDIA Granary 25 EU language support**
 
-**Day 5: Cloudbeds Connector + SiteMinder Start**
-- Morning: Complete Cloudbeds implementation
-- Afternoon: Begin SiteMinder SOAP integration
+**Day 3: Oracle OPERA + ASR Router Implementation**
+- Morning: Begin OHIP WebAPI integration and authentication
+- Afternoon: **Implement ASR Router Service** for Granary/Whisper hybrid architecture
 
-### Week 2 (Days 6-10): Advanced Features
-**Goal**: Complete feature expansion and business capabilities
+**Day 4: Oracle OPERA + Enhanced Apaleo Integration**
+- Morning: Complete Oracle enterprise features and performance optimization
+- Afternoon: **Begin Enhanced Apaleo webhook integration**
 
-**Day 6: Complete Connectors + Advanced AI Start**
-- Morning: Finish SiteMinder connector
-- Afternoon: Begin enhanced intent classification
+**Day 5: Cloudbeds + SiteMinder + Apaleo OAuth**
+- Morning: Complete Cloudbeds implementation + Begin SiteMinder SOAP integration
+- Afternoon: **Complete Enhanced Apaleo OAuth scopes implementation**
 
-**Day 7: AI & Multi-Language**
-- Morning: Complete advanced conversation flow
-- Afternoon: Begin multi-language expansion
+**Day 6: Advanced AI + Apaleo Pay Integration**
+- Morning: Complete SiteMinder connector + Begin enhanced intent classification
+- Afternoon: **Begin Apaleo Pay (Adyen) integration**
 
-**Day 8: Multi-Language + Multi-Tenant**
-- Morning: Complete TTS/ASR language expansion
-- Afternoon: Begin multi-tenant architecture enhancement
+### Week 2 (Days 7-12): Advanced Features & Business Capabilities
+**Goal**: Complete feature expansion, business capabilities, and system integration
 
-**Day 9: Business Features**
-- Morning: Complete multi-tenant features
-- Afternoon: Implement upselling engine and payment processing
+**Day 7: AI Enhancement + Payment Completion**
+- Morning: Complete advanced conversation flow implementation
+- Afternoon: **Complete Apaleo Pay integration and testing**
 
-**Day 10: Analytics & Final Testing**
-- Morning: Advanced analytics implementation
-- Afternoon: Integration testing and sprint review
+**Day 8: Multi-Tenant + NVIDIA Validation**
+- Morning: Begin multi-tenant architecture enhancement
+- Afternoon: **Complete NVIDIA Granary performance validation and testing**
+
+**Day 9: Multi-Tenant + Business Features**
+- Morning: Complete multi-tenant features and hotel chain support
+- Afternoon: Implement upselling engine and revenue optimization
+
+**Day 10: Analytics + Integration Framework**
+- Morning: Advanced analytics and business intelligence implementation
+- Afternoon: Enhanced integration features and cross-PMS coordination
+
+**Day 11: Testing + Performance Validation**
+- Morning: **End-to-end testing with NVIDIA Granary and Apaleo Pay**
+- Afternoon: Performance testing with 500+ concurrent calls
+
+**Day 12: Final Integration + Sprint Review**
+- Morning: **Final system integration testing and validation**
+- Afternoon: **Sprint review, documentation updates, and Sprint 4 planning**
 
 ## 🎯 SPRINT GOALS
 
 ### Must Achieve (Critical Success Factors)
 1. **4 Additional PMS Connectors**: Mews, OPERA, Cloudbeds, SiteMinder
-2. **Advanced AI**: Enhanced intent detection and conversation flow
-3. **25 Language Support**: Complete EU language coverage
-4. **Multi-Tenant Enterprise**: Hotel chain support and isolation
-5. **Business Features**: Upselling and payment processing
+2. **NVIDIA Granary Integration**: Replace Riva with state-of-the-art Granary for 25 EU languages
+3. **Enhanced Apaleo Integration**: Webhooks, Apaleo Pay, and enterprise OAuth scopes
+4. **Advanced AI**: Enhanced intent detection and conversation flow
+5. **Multi-Tenant Enterprise**: Hotel chain support and isolation
+6. **Business Features**: Upselling and Apaleo Pay integration
 
 ### Should Achieve (High Priority)
-1. **Business Intelligence**: Analytics and insights dashboard
-2. **Integration Framework**: Webhooks and real-time notifications
-3. **Performance Optimization**: Scaling for larger deployments
-4. **Revenue Features**: Pricing optimization and reporting
+1. **NVIDIA Granary Performance**: <500ms transcription latency with hybrid routing
+2. **Apaleo Ecosystem Completeness**: Real-time webhooks and finance API integration
+3. **Business Intelligence**: Analytics and insights dashboard
+4. **Cross-PMS Integration Framework**: Multi-connector webhooks and coordination
+5. **Performance Optimization**: Scaling for larger deployments with GPU optimization
 
 ### Could Achieve (Nice to Have)
 1. **Advanced Customization**: Hotel-specific AI training
@@ -333,25 +417,32 @@ Basic hotel isolation exists but needs enterprise multi-tenancy.
 
 ## 📊 SPRINT METRICS
 
-### Story Points
-- **Total Planned**: 45 points
-- **PMS Connectors**: 20 points (44%)
-- **AI & Language**: 15 points (33%)
-- **Business Features**: 10 points (23%)
+### Story Points (Enhanced)
+- **Total Planned**: 55 points (enhanced from 45 points)
+- **PMS Connectors**: 20 points (36%)
+- **NVIDIA Granary Integration**: 8 points (15%)
+- **Enhanced Apaleo Features**: 6 points (11%)
+- **AI & Language**: 12 points (22%)
+- **Business Features**: 9 points (16%)
 
-### Success Metrics
+### Success Metrics (Enhanced)
 - [ ] **5 Total PMS Connectors**: Apaleo + 4 new connectors operational
-- [ ] **25 Languages**: Complete EU language support
+- [ ] **NVIDIA Granary Operational**: 25 EU languages with >95% accuracy
+- [ ] **Enhanced Apaleo Integration**: Webhooks, Pay, and OAuth scopes functional
+- [ ] **Hybrid ASR Performance**: <500ms latency with automatic language routing
 - [ ] **Multi-Tenant**: Support for hotel chains with 10+ properties
-- [ ] **Business Value**: Upselling and payment processing functional
-- [ ] **Performance**: System scales to 500+ concurrent calls
+- [ ] **Business Value**: Upselling and Apaleo Pay processing functional
+- [ ] **Performance**: System scales to 500+ concurrent calls with GPU optimization
 
-### Quality Gates
+### Quality Gates (Enhanced)
 - [ ] All PMS connectors pass golden contract tests
+- [ ] **NVIDIA Granary performance exceeds Riva baseline** (accuracy + throughput)
+- [ ] **Apaleo webhook integration** tested with real-time notifications
 - [ ] AI accuracy >90% on standardized test dataset
-- [ ] All 25 languages functional for ASR and TTS
+- [ ] **Hybrid ASR routing** works seamlessly between Granary and Whisper
+- [ ] All 25 EU languages functional for NVIDIA Granary ASR
 - [ ] Multi-tenant isolation verified through testing
-- [ ] Business features generate measurable revenue impact
+- [ ] **Apaleo Pay (Adyen) integration** completes end-to-end payment flows
 
 ## 🚨 RISKS & MITIGATION
 
@@ -365,11 +456,13 @@ Basic hotel isolation exists but needs enterprise multi-tenancy.
 
 ## 🔗 DEPENDENCIES
 
-### External Dependencies
+### External Dependencies (Enhanced)
 - [ ] PMS vendor sandbox access (Mews, Oracle, Cloudbeds, SiteMinder)
-- [ ] Language model training data
-- [ ] Payment processor account setup (Stripe)
-- [ ] Additional voice licensing for languages
+- [ ] **NVIDIA Granary model access** and NeMo framework setup
+- [ ] **Apaleo Pay (Adyen) credentials** and sandbox environment
+- [ ] **Enhanced Apaleo OAuth scopes** approval and configuration
+- [ ] **GPU optimization libraries** for g4dn.xlarge instances
+- [ ] Additional voice licensing for 25 EU languages
 
 ### Internal Dependencies
 - ✅ Sprint 2 completion (production-ready system)
@@ -420,5 +513,5 @@ Basic hotel isolation exists but needs enterprise multi-tenancy.
 **Technical Lead**: Backend + Integrations Team Leads
 **AI/ML Lead**: AI/ML Team Lead
 **Business Lead**: Product Manager
-**Review Schedule**: Daily standups + weekly checkpoints (Day 5, Day 10)
-**Sprint End**: Day 10 retrospective and Sprint 4 planning
+**Review Schedule**: Daily standups + weekly checkpoints (Day 6, Day 12)
+**Sprint End**: Day 12 retrospective and Sprint 4 planning

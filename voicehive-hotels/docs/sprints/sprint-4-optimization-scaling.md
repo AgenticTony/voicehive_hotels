@@ -148,7 +148,72 @@ Fortune 500 clients require advanced enterprise integration and security feature
 
 ## 🚨 HIGH PRIORITY ITEMS
 
-### 4. Advanced AI & Intelligence Features ❌
+### 4. Apaleo One UI Integration & Enterprise Frontend ✅ NEW CRITICAL FEATURE
+**Priority**: HIGH - ENTERPRISE FRONTEND COMPLETENESS
+**Owner**: Frontend + Integrations Team
+**Estimated Effort**: 2.5 days (essential for enterprise deployment)
+
+**Background**:
+Current integration covers backend APIs. Enterprise deployment requires complete Apaleo One UI integration for seamless hotel staff experience and guest-facing interfaces.
+
+**Strategic Benefits**:
+- **Complete Apaleo Ecosystem**: Full frontend integration with Apaleo One platform
+- **Seamless Staff Experience**: Hotel staff work within familiar Apaleo interface
+- **Guest-Facing Integration**: Booking widgets and interfaces for hotel websites
+- **Marketplace Distribution**: Apaleo App Store integration for broader reach
+- **Enterprise UI Standards**: Modern, responsive interfaces meeting enterprise expectations
+
+**Tasks**:
+
+#### A. Apaleo One Platform Integration ✅ NEW
+**Effort**: 1.5 days
+**Tasks**:
+- [ ] **Implement Apaleo One iframe integration** for embedded voice controls
+- [ ] **Add Apaleo One navigation integration** with voice receptionist access
+- [ ] **Create Apaleo One dashboard widgets** for call analytics and status
+- [ ] **Implement single sign-on** between VoiceHive and Apaleo One
+- [ ] **Add real-time status indicators** in Apaleo One interface
+- [ ] **Create staff notification system** integrated with Apaleo One alerts
+
+#### B. Frontend Booking Widget & Guest Interface ✅ NEW
+**Effort**: 1 day
+**Tasks**:
+- [ ] **Create embeddable booking widget** for hotel websites with voice integration
+- [ ] **Implement guest-facing call interface** with Apaleo property branding
+- [ ] **Add responsive design** for mobile and desktop experiences
+- [ ] **Integrate with hotel website themes** and branding guidelines
+- [ ] **Create guest call history interface** accessible through Apaleo portals
+- [ ] **Implement accessibility compliance** (WCAG 2.1 AA standards)
+
+**Integration Architecture**:
+```javascript
+// Apaleo One Integration Example
+class ApaleoOneIntegration {
+    constructor(propertyId, authToken) {
+        this.propertyId = propertyId;
+        this.authToken = authToken;
+        this.voiceWidgets = new VoiceHiveWidgets();
+    }
+
+    async embedVoiceControls(containerElement) {
+        return await this.voiceWidgets.renderApaleoIntegratedInterface({
+            container: containerElement,
+            theme: await this.getApaleoTheme(),
+            sso: this.authToken
+        });
+    }
+}
+```
+
+**Enhanced Acceptance Criteria**:
+- [ ] **Apaleo One integration** functional with embedded voice controls
+- [ ] **SSO working** between VoiceHive and Apaleo One
+- [ ] **Booking widget** successfully embeds in hotel websites
+- [ ] **Mobile-responsive** interfaces working across all devices
+- [ ] **Real-time updates** sync between VoiceHive and Apaleo One
+- [ ] **Enterprise UI standards** met for Fortune 500 deployment
+
+### 5. Advanced AI & Intelligence Features ❌
 **Priority**: HIGH - COMPETITIVE ADVANTAGE
 **Owner**: AI/ML Team
 **Estimated Effort**: 3 days
@@ -179,7 +244,7 @@ Fortune 500 clients require advanced enterprise integration and security feature
 - [ ] Guest intelligence insights actionable
 - [ ] Privacy and consent requirements met
 
-### 5. Advanced Scalability & Performance ❌
+### 6. Advanced Scalability & Performance ❌
 **Priority**: HIGH - TECHNICAL EXCELLENCE
 **Owner**: Platform Team
 **Estimated Effort**: 2.5 days
@@ -212,7 +277,7 @@ Fortune 500 clients require advanced enterprise integration and security feature
 
 ## 📈 MEDIUM PRIORITY ITEMS
 
-### 6. Advanced Security & Compliance ❌
+### 7. Advanced Security & Compliance ❌
 **Priority**: MEDIUM - SECURITY EXCELLENCE
 **Owner**: Security Team
 **Estimated Effort**: 2 days
@@ -224,7 +289,7 @@ Fortune 500 clients require advanced enterprise integration and security feature
 - [ ] Add security information and event management (SIEM) integration
 - [ ] Implement automated compliance reporting
 
-### 7. Developer Experience & Platform Features ❌
+### 8. Developer Experience & Platform Features ❌
 **Priority**: MEDIUM - DEVELOPMENT EFFICIENCY
 **Owner**: Platform Team
 **Estimated Effort**: 1.5 days
@@ -236,7 +301,7 @@ Fortune 500 clients require advanced enterprise integration and security feature
 - [ ] Implement webhook framework for third-party integrations
 - [ ] Add SDK generation for popular programming languages
 
-### 8. Business Intelligence & Advanced Analytics ❌
+### 9. Business Intelligence & Advanced Analytics ❌
 **Priority**: MEDIUM - BUSINESS VALUE
 **Owner**: Data Team
 **Estimated Effort**: 1.5 days
@@ -270,10 +335,10 @@ Fortune 500 clients require advanced enterprise integration and security feature
 ### Week 2 (Days 8-14): Advanced Features & Enterprise Ready
 **Goal**: Complete enterprise features and advanced capabilities
 
-**Days 8-10: Enterprise Features**
-- Day 8: SSO integration (SAML, OIDC)
-- Day 9: LDAP/Active Directory integration
-- Day 10: Enterprise security testing and validation
+**Days 8-10: Enterprise Features & Apaleo Integration**
+- Day 8: SSO integration (SAML, OIDC) + Begin Apaleo One UI integration
+- Day 9: LDAP/Active Directory integration + Complete Apaleo One platform integration
+- Day 10: Frontend booking widget & guest interfaces + Enterprise security testing
 
 **Days 11-12: Advanced AI Features**
 - Day 11: Voice cloning and personalization
@@ -288,15 +353,17 @@ Fortune 500 clients require advanced enterprise integration and security feature
 ### Must Achieve (Critical Success Factors)
 1. **Service Modularization**: Orchestrator reduced to <20k LOC, 3 services extracted
 2. **Global Expansion**: APAC and Americas market support with local compliance
-3. **Enterprise SSO**: Support for major enterprise identity providers
-4. **Advanced AI**: Voice cloning and sentiment analysis operational
-5. **Scalability**: System handles 10x load spikes with predictive scaling
+3. **Apaleo One UI Integration**: Complete frontend integration with embedded voice controls
+4. **Enterprise SSO**: Support for major enterprise identity providers
+5. **Advanced AI**: Voice cloning and sentiment analysis operational
+6. **Scalability**: System handles 10x load spikes with predictive scaling
 
 ### Should Achieve (High Priority)
-1. **LDAP Integration**: Enterprise directory services support
-2. **Global Performance**: Regional optimization and failover
-3. **Advanced Security**: Zero-trust architecture implementation
-4. **Developer Experience**: API versioning and developer portal
+1. **Guest-Facing Widgets**: Embeddable booking widgets for hotel websites
+2. **LDAP Integration**: Enterprise directory services support
+3. **Global Performance**: Regional optimization and failover
+4. **Advanced Security**: Zero-trust architecture implementation
+5. **Developer Experience**: API versioning and developer portal
 
 ### Could Achieve (Nice to Have)
 1. **Business Intelligence**: Predictive analytics and BI dashboards
@@ -305,22 +372,26 @@ Fortune 500 clients require advanced enterprise integration and security feature
 
 ## 📊 SPRINT METRICS
 
-### Story Points
-- **Total Planned**: 55 points
-- **Architecture**: 25 points (45%)
-- **Enterprise Features**: 15 points (27%)
-- **AI & Performance**: 15 points (28%)
+### Story Points (Enhanced)
+- **Total Planned**: 60 points (enhanced from 55 points)
+- **Architecture**: 25 points (42%)
+- **Enterprise Features**: 18 points (30%) - includes Apaleo One UI
+- **AI & Performance**: 17 points (28%)
 
-### Success Metrics
+### Success Metrics (Enhanced)
 - [ ] **Architecture**: <20k LOC in orchestrator, 3 services extracted
 - [ ] **Global**: 3 regions supported (EU, APAC, Americas)
+- [ ] **Apaleo One Integration**: Embedded voice controls functional in Apaleo One
+- [ ] **Frontend Widgets**: Booking widgets successfully embed in hotel websites
 - [ ] **Enterprise**: SSO and LDAP integration functional
 - [ ] **Performance**: 10x load spike handling with <2s response time
 - [ ] **AI**: Voice cloning and sentiment analysis >85% accuracy
 
-### Quality Gates
+### Quality Gates (Enhanced)
 - [ ] Modularized architecture maintains performance
 - [ ] Global compliance validated in each region
+- [ ] **Apaleo One UI integration** tested with actual Apaleo One environment
+- [ ] **Booking widgets** successfully tested on multiple hotel websites
 - [ ] Enterprise integrations tested with actual providers
 - [ ] AI features meet accuracy and quality standards
 - [ ] Security and compliance audits passed
@@ -337,9 +408,12 @@ Fortune 500 clients require advanced enterprise integration and security feature
 
 ## 🔗 DEPENDENCIES
 
-### External Dependencies
+### External Dependencies (Enhanced)
 - [ ] Legal review for global compliance requirements
 - [ ] Enterprise identity provider partnerships (Okta, Azure AD)
+- [ ] **Apaleo One UI integration** sandbox access and developer portal
+- [ ] **Apaleo App Store** submission and approval process
+- [ ] **Frontend widget testing** with partner hotel websites
 - [ ] Voice cloning licensing and ethical approvals
 - [ ] Regional infrastructure provisioning
 
