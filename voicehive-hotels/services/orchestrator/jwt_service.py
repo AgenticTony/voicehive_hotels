@@ -22,10 +22,10 @@ logger = get_safe_logger("orchestrator.jwt_service")
 
 class JWTService:
     """JWT token management service with Redis session store"""
-    
-    def __init__(self, redis_url: str, secret_key: Optional[str] = None):
-        self.redis_url = redis_url
-        self.redis_pool = None
+
+    def __init__(self, redis_client: aioredis.Redis, secret_key: Optional[str] = None):
+        # Accept Redis client from shared connection pool (official Redis best practice)
+        self.redis_client = redis_client
         self.algorithm = "RS256"
         
         # Generate RSA key pair for JWT signing
@@ -54,20 +54,7 @@ class JWTService:
         self.refresh_token_expire_days = 7
         self.session_expire_hours = 24
     
-    async def initialize(self):
-        """Initialize Redis connection pool"""
-        self.redis_pool = aioredis.ConnectionPool.from_url(
-            self.redis_url,
-            max_connections=20,
-            retry_on_timeout=True
-        )
-        logger.info("jwt_service_initialized", redis_url=self.redis_url)
-    
-    async def get_redis(self) -> aioredis.Redis:
-        """Get Redis connection from pool"""
-        if not self.redis_pool:
-            await self.initialize()
-        return aioredis.Redis(connection_pool=self.redis_pool)
+    # Connection pool initialization removed - using shared Redis client per official documentation
     
     async def create_tokens(self, user_context: UserContext) -> Dict[str, Any]:
         """Create access and refresh tokens for a user"""
@@ -111,7 +98,7 @@ class JWTService:
         )
         
         # Store session in Redis
-        redis = await self.get_redis()
+        redis = self.redis_client
         session_data = {
             "user_id": user_context.user_id,
             "email": user_context.email,
@@ -164,7 +151,7 @@ class JWTService:
             )
             
             # Check if token is blacklisted
-            redis = await self.get_redis()
+            redis = self.redis_client
             is_blacklisted = await redis.exists(f"blacklist:{payload['jti']}")
             if is_blacklisted:
                 raise AuthenticationError("Token has been revoked")
@@ -217,7 +204,7 @@ class JWTService:
                 raise AuthenticationError("Invalid token type")
             
             # Check if refresh token is valid
-            redis = await self.get_redis()
+            redis = self.redis_client
             session_id = await redis.get(f"refresh_token:{payload['jti']}")
             if not session_id:
                 raise AuthenticationError("Refresh token not found or expired")
@@ -291,7 +278,7 @@ class JWTService:
                 options={"verify_exp": False}  # Don't verify expiration for revocation
             )
             
-            redis = await self.get_redis()
+            redis = self.redis_client
             
             # Add token to blacklist until its natural expiration
             ttl = max(0, payload["exp"] - int(datetime.utcnow().timestamp()))
@@ -306,7 +293,7 @@ class JWTService:
     
     async def logout_session(self, session_id: str):
         """Logout a specific session"""
-        redis = await self.get_redis()
+        redis = self.redis_client
         
         # Get session data to find refresh token
         session_data = await redis.hgetall(f"session:{session_id}")
@@ -323,7 +310,7 @@ class JWTService:
     
     async def logout_all_sessions(self, user_id: str):
         """Logout all sessions for a user"""
-        redis = await self.get_redis()
+        redis = self.redis_client
         
         # Find all sessions for user (this is a simplified approach)
         # In production, you might want to maintain a user->sessions mapping
@@ -344,7 +331,7 @@ class JWTService:
     
     async def cleanup_expired_sessions(self):
         """Cleanup expired sessions (should be run periodically)"""
-        redis = await self.get_redis()
+        redis = self.redis_client
         
         cursor = 0
         cleaned_count = 0

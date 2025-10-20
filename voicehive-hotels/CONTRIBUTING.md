@@ -54,7 +54,7 @@ git checkout -b fix/your-bug-fix
 
 ### 2. Make Changes
 
-- Follow the coding standards in [WARP.md](WARP.md)
+- Follow the coding standards in [WARP.md](docs/setup/WARP.md)
 - Write tests for new functionality
 - Update documentation as needed
 

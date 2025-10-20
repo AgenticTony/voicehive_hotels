@@ -25,6 +25,7 @@ from enum import Enum
 
 # Import validation modules
 from production_readiness_validator import ProductionReadinessValidator
+from functional_production_validator import FunctionalProductionValidator
 from security_penetration_tester import SecurityPenetrationTester
 from load_testing_validator import LoadTestingValidator
 from production_certification_generator import ProductionCertificationGenerator
@@ -234,27 +235,62 @@ class ProductionValidationOrchestrator:
             }
     
     async def _run_production_readiness_validation(self) -> Dict[str, Any]:
-        """Run production readiness validation"""
-        logger.info("Running production readiness validation")
-        
+        """Run production readiness validation using functional testing"""
+        logger.info("Running functional production readiness validation")
+
         try:
-            validator = ProductionReadinessValidator()
-            report = await validator.run_comprehensive_validation()
-            
+            # Use new functional validator instead of file-path-based validator
+            functional_validator = FunctionalProductionValidator(base_url=self.base_url)
+            functional_report = await functional_validator.run_all_functional_tests()
+
+            # Run legacy validator for additional checks (if needed)
+            legacy_validator = ProductionReadinessValidator()
+            legacy_report = await legacy_validator.run_comprehensive_validation()
+
+            # Combine results - functional tests take priority
+            total_tests = functional_report.total_tests + legacy_report.total_tests
+            passed_tests = functional_report.passed_tests + legacy_report.passed_tests
+            failed_tests = functional_report.failed_tests + legacy_report.failed_tests
+            warning_tests = functional_report.warning_tests + legacy_report.warning_tests
+
+            # Overall status based on functional tests primarily
+            if functional_report.failed_tests > 0:
+                overall_status = "FAILED"
+            elif functional_report.warning_tests > 0 or legacy_report.failed_tests > 0:
+                overall_status = "WARNING"
+            else:
+                overall_status = "PASSED"
+
             return {
-                "status": report.overall_status.value,
-                "message": f"Production readiness validation completed: {report.passed_tests}/{report.total_tests} tests passed",
+                "status": overall_status,
+                "message": f"Production readiness validation completed: {passed_tests}/{total_tests} tests passed (Functional: {functional_report.passed_tests}/{functional_report.total_tests})",
                 "details": {
-                    "total_tests": report.total_tests,
-                    "passed_tests": report.passed_tests,
-                    "failed_tests": report.failed_tests,
-                    "warning_tests": report.warning_tests,
-                    "execution_time": report.execution_time,
-                    "recommendations": report.recommendations
+                    "total_tests": total_tests,
+                    "passed_tests": passed_tests,
+                    "failed_tests": failed_tests,
+                    "warning_tests": warning_tests,
+                    "functional_validation": {
+                        "status": functional_report.overall_status,
+                        "tests": functional_report.total_tests,
+                        "passed": functional_report.passed_tests,
+                        "failed": functional_report.failed_tests,
+                        "warnings": functional_report.warning_tests,
+                        "duration": functional_report.total_duration
+                    },
+                    "legacy_validation": {
+                        "status": legacy_report.overall_status.value,
+                        "tests": legacy_report.total_tests,
+                        "passed": legacy_report.passed_tests,
+                        "failed": legacy_report.failed_tests,
+                        "warnings": legacy_report.warning_tests,
+                        "duration": legacy_report.execution_time
+                    },
+                    "recommendations": functional_report.summary["recommendations"] + legacy_report.recommendations
                 }
             }
-            
+
         except Exception as e:
+            logger.error(f"Production readiness validation failed: {e}")
             return {
                 "status": "ERROR",
                 "message": f"Production readiness validation failed: {str(e)}",

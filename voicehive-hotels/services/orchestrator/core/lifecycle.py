@@ -40,9 +40,12 @@ async def app_lifespan(app: FastAPI):
     logger.info("starting_orchestrator", region=REGION, environment=ENVIRONMENT)
     
     try:
-        # Initialize Redis connection
-        app.state.redis = await redis.from_url(REDIS_URL)
-        logger.info("redis_connection_initialized")
+        # Initialize Redis connection using connection pool manager
+        # Following official Redis documentation best practices for production usage
+        pool_manager = get_connection_pool_manager()
+        redis_pool = await pool_manager.get_redis_pool("default")
+        app.state.redis = redis_pool.redis  # Use pooled Redis client
+        logger.info("redis_connection_pool_initialized", pool_name="default")
         
         # Initialize performance optimization components
         await _initialize_performance_components(app)

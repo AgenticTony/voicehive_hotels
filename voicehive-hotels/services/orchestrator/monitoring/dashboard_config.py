@@ -533,7 +533,353 @@ class DashboardGenerator:
         )
         
         return self._dashboard_to_json(dashboard)
-    
+
+    def create_circuit_breaker_dashboard(self) -> Dict[str, Any]:
+        """Create circuit breaker monitoring dashboard"""
+        panels = []
+
+        # Circuit Breaker Overview Row
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="Circuit Breaker Overview",
+            type="row",
+            targets=[],
+            gridPos={"h": 1, "w": 24, "x": 0, "y": 0}
+        ))
+
+        # Overall Circuit Breaker Health
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="Circuit Breaker Health",
+            type="stat",
+            targets=[{
+                "expr": "sum(voicehive_database_circuit_breaker_state == 0) + sum(voicehive_tts_synthesis_circuit_breaker_state == 0) + sum(voicehive_asr_circuit_breaker_state == 0) + sum(voicehive_apaleo_circuit_breaker_state == 0)",
+                "legendFormat": "Healthy Breakers",
+                "refId": "A"
+            }],
+            gridPos={"h": 8, "w": 6, "x": 0, "y": 1},
+            options={
+                "reduceOptions": {
+                    "values": False,
+                    "calcs": ["lastNotNull"],
+                    "fields": ""
+                },
+                "orientation": "auto",
+                "textMode": "auto",
+                "colorMode": "value",
+                "graphMode": "area"
+            },
+            fieldConfig={
+                "defaults": {
+                    "color": {"mode": "thresholds"},
+                    "thresholds": {
+                        "steps": [
+                            {"color": "red", "value": None},
+                            {"color": "yellow", "value": 5},
+                            {"color": "green", "value": 8}
+                        ]
+                    },
+                    "unit": "short"
+                }
+            }
+        ))
+
+        # Open Circuit Breakers
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="Open Circuit Breakers",
+            type="stat",
+            targets=[{
+                "expr": "sum(voicehive_database_circuit_breaker_state == 1) + sum(voicehive_tts_synthesis_circuit_breaker_state == 1) + sum(voicehive_asr_circuit_breaker_state == 1) + sum(voicehive_apaleo_circuit_breaker_state == 1)",
+                "legendFormat": "Open Breakers",
+                "refId": "A"
+            }],
+            gridPos={"h": 8, "w": 6, "x": 6, "y": 1},
+            options={
+                "reduceOptions": {
+                    "values": False,
+                    "calcs": ["lastNotNull"],
+                    "fields": ""
+                },
+                "orientation": "auto",
+                "textMode": "auto",
+                "colorMode": "value",
+                "graphMode": "area"
+            },
+            fieldConfig={
+                "defaults": {
+                    "color": {"mode": "thresholds"},
+                    "thresholds": {
+                        "steps": [
+                            {"color": "green", "value": None},
+                            {"color": "yellow", "value": 1},
+                            {"color": "red", "value": 3}
+                        ]
+                    },
+                    "unit": "short"
+                }
+            }
+        ))
+
+        # Circuit Breaker States by Service
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="Circuit Breaker States by Service",
+            type="timeseries",
+            targets=[
+                {
+                    "expr": "voicehive_database_circuit_breaker_state",
+                    "legendFormat": "Database - {{breaker_name}}",
+                    "refId": "A"
+                },
+                {
+                    "expr": "voicehive_tts_synthesis_circuit_breaker_state",
+                    "legendFormat": "TTS - {{breaker_name}}",
+                    "refId": "B"
+                },
+                {
+                    "expr": "voicehive_asr_circuit_breaker_state",
+                    "legendFormat": "ASR - {{breaker_name}}",
+                    "refId": "C"
+                },
+                {
+                    "expr": "voicehive_apaleo_circuit_breaker_state",
+                    "legendFormat": "Apaleo - {{breaker_name}}",
+                    "refId": "D"
+                }
+            ],
+            gridPos={"h": 8, "w": 12, "x": 12, "y": 1},
+            fieldConfig={
+                "defaults": {
+                    "color": {"mode": "palette-classic"},
+                    "unit": "short",
+                    "min": 0,
+                    "max": 2
+                },
+                "overrides": [
+                    {
+                        "matcher": {"id": "byValue", "options": {"value": 0}},
+                        "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]
+                    },
+                    {
+                        "matcher": {"id": "byValue", "options": {"value": 1}},
+                        "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]
+                    },
+                    {
+                        "matcher": {"id": "byValue", "options": {"value": 2}},
+                        "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "yellow"}}]
+                    }
+                ]
+            }
+        ))
+
+        # Database Circuit Breakers Row
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="Database Circuit Breakers",
+            type="row",
+            targets=[],
+            gridPos={"h": 1, "w": 24, "x": 0, "y": 9}
+        ))
+
+        # Database Operations Success Rate
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="Database Operations Success Rate",
+            type="timeseries",
+            targets=[{
+                "expr": "rate(voicehive_database_operations_total{status=\"success\"}[5m]) / rate(voicehive_database_operations_total[5m]) * 100",
+                "legendFormat": "{{operation}} Success Rate",
+                "refId": "A"
+            }],
+            gridPos={"h": 8, "w": 12, "x": 0, "y": 10},
+            fieldConfig={
+                "defaults": {
+                    "color": {"mode": "palette-classic"},
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100
+                }
+            }
+        ))
+
+        # Database Operation Duration
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="Database Operation Duration (95th Percentile)",
+            type="timeseries",
+            targets=[{
+                "expr": "histogram_quantile(0.95, rate(voicehive_database_operation_duration_seconds_bucket[5m]))",
+                "legendFormat": "{{operation}} P95",
+                "refId": "A"
+            }],
+            gridPos={"h": 8, "w": 12, "x": 12, "y": 10},
+            fieldConfig={
+                "defaults": {
+                    "color": {"mode": "palette-classic"},
+                    "unit": "s"
+                }
+            }
+        ))
+
+        # TTS Circuit Breakers Row
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="TTS Circuit Breakers",
+            type="row",
+            targets=[],
+            gridPos={"h": 1, "w": 24, "x": 0, "y": 18}
+        ))
+
+        # TTS Synthesis Success Rate
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="TTS Synthesis Success Rate",
+            type="timeseries",
+            targets=[{
+                "expr": "rate(voicehive_tts_synthesis_total{status=\"success\"}[5m]) / rate(voicehive_tts_synthesis_total[5m]) * 100",
+                "legendFormat": "{{language}} - {{engine}}",
+                "refId": "A"
+            }],
+            gridPos={"h": 8, "w": 12, "x": 0, "y": 19},
+            fieldConfig={
+                "defaults": {
+                    "color": {"mode": "palette-classic"},
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100
+                }
+            }
+        ))
+
+        # TTS Synthesis Duration
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="TTS Synthesis Duration",
+            type="timeseries",
+            targets=[{
+                "expr": "histogram_quantile(0.95, rate(voicehive_tts_synthesis_duration_seconds_bucket[5m]))",
+                "legendFormat": "{{language}} - {{engine}} P95",
+                "refId": "A"
+            }],
+            gridPos={"h": 8, "w": 12, "x": 12, "y": 19},
+            fieldConfig={
+                "defaults": {
+                    "color": {"mode": "palette-classic"},
+                    "unit": "s"
+                }
+            }
+        ))
+
+        # ASR Circuit Breakers Row
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="ASR Circuit Breakers",
+            type="row",
+            targets=[],
+            gridPos={"h": 1, "w": 24, "x": 0, "y": 27}
+        ))
+
+        # ASR Operations Success Rate
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="ASR Operations Success Rate",
+            type="timeseries",
+            targets=[{
+                "expr": "rate(voicehive_asr_operations_total{status=\"success\"}[5m]) / rate(voicehive_asr_operations_total[5m]) * 100",
+                "legendFormat": "{{operation}} Success Rate",
+                "refId": "A"
+            }],
+            gridPos={"h": 8, "w": 12, "x": 0, "y": 28},
+            fieldConfig={
+                "defaults": {
+                    "color": {"mode": "palette-classic"},
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100
+                }
+            }
+        ))
+
+        # Apaleo Circuit Breakers Row
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="Apaleo PMS Circuit Breakers",
+            type="row",
+            targets=[],
+            gridPos={"h": 1, "w": 24, "x": 0, "y": 36}
+        ))
+
+        # Apaleo Operations Success Rate
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="Apaleo Operations Success Rate",
+            type="timeseries",
+            targets=[{
+                "expr": "rate(voicehive_apaleo_operations_total{status=\"success\"}[5m]) / rate(voicehive_apaleo_operations_total[5m]) * 100",
+                "legendFormat": "{{operation}} Success Rate",
+                "refId": "A"
+            }],
+            gridPos={"h": 8, "w": 12, "x": 0, "y": 37},
+            fieldConfig={
+                "defaults": {
+                    "color": {"mode": "palette-classic"},
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100
+                }
+            }
+        ))
+
+        # Circuit Breaker Failure Counts
+        panels.append(GrafanaPanel(
+            id=self._get_next_panel_id(),
+            title="Circuit Breaker Failure Counts (Last Hour)",
+            type="table",
+            targets=[{
+                "expr": "increase(voicehive_database_operations_total{status=\"circuit_breaker_open\"}[1h]) or increase(voicehive_tts_synthesis_total{status=\"circuit_breaker_open\"}[1h]) or increase(voicehive_asr_operations_total{status=\"circuit_breaker_open\"}[1h]) or increase(voicehive_apaleo_operations_total{status=\"circuit_breaker_open\"}[1h])",
+                "legendFormat": "{{__name__}} - {{operation}}",
+                "refId": "A",
+                "format": "table"
+            }],
+            gridPos={"h": 8, "w": 12, "x": 12, "y": 37},
+            fieldConfig={
+                "defaults": {
+                    "color": {"mode": "thresholds"},
+                    "thresholds": {
+                        "steps": [
+                            {"color": "green", "value": None},
+                            {"color": "yellow", "value": 1},
+                            {"color": "red", "value": 5}
+                        ]
+                    }
+                }
+            }
+        ))
+
+        dashboard = GrafanaDashboard(
+            id=4,
+            title="VoiceHive Hotels - Circuit Breaker Monitoring",
+            tags=["voicehive", "circuit-breaker", "resilience"],
+            panels=panels,
+            time={"from": "now-1h", "to": "now"},
+            refresh="30s",
+            templating={
+                "list": [
+                    {
+                        "name": "service",
+                        "type": "query",
+                        "query": "label_values({__name__=~\"voicehive_.*_circuit_breaker_state\"}, service)",
+                        "refresh": 1,
+                        "includeAll": True,
+                        "multi": True
+                    }
+                ]
+            }
+        )
+
+        return self._dashboard_to_json(dashboard)
+
     def _dashboard_to_json(self, dashboard: GrafanaDashboard) -> Dict[str, Any]:
         """Convert dashboard to JSON format"""
         dashboard_dict = asdict(dashboard)
@@ -567,19 +913,21 @@ dashboard_generator = DashboardGenerator()
 BUSINESS_METRICS_DASHBOARD = dashboard_generator.create_business_metrics_dashboard()
 SYSTEM_HEALTH_DASHBOARD = dashboard_generator.create_system_health_dashboard()
 SLA_MONITORING_DASHBOARD = dashboard_generator.create_sla_monitoring_dashboard()
+CIRCUIT_BREAKER_DASHBOARD = dashboard_generator.create_circuit_breaker_dashboard()
 
 
 def export_dashboards_to_files():
     """Export dashboards to JSON files for Grafana import"""
     import os
-    
+
     dashboard_dir = "dashboards"
     os.makedirs(dashboard_dir, exist_ok=True)
-    
+
     dashboards = {
         "business-metrics.json": BUSINESS_METRICS_DASHBOARD,
         "system-health.json": SYSTEM_HEALTH_DASHBOARD,
-        "sla-monitoring.json": SLA_MONITORING_DASHBOARD
+        "sla-monitoring.json": SLA_MONITORING_DASHBOARD,
+        "circuit-breaker.json": CIRCUIT_BREAKER_DASHBOARD
     }
     
     for filename, dashboard in dashboards.items():

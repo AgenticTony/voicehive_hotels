@@ -237,16 +237,16 @@ class TestEnhancedAlerting:
     
     @pytest.mark.asyncio
     async def test_pagerduty_notification(self):
-        """Test PagerDuty notification channel"""
-        integration_key = "test-integration-key"
+        """Test PagerDuty notification channel with official API v2 compliance"""
+        integration_key = "test-integration-key-32chars-long"
         channel = PagerDutyNotificationChannel(integration_key)
-        
+
         # Mock the HTTP request
         with patch('aiohttp.ClientSession.post') as mock_post:
             mock_response = Mock()
             mock_response.status = 202
             mock_post.return_value.__aenter__.return_value = mock_response
-            
+
             from enhanced_alerting import Alert, AlertStatus
             alert = Alert(
                 id="test-alert-456",
@@ -258,12 +258,97 @@ class TestEnhancedAlerting:
                 metric_value=0.15,
                 threshold=0.05,
                 labels={"service": "test"},
-                started_at=datetime.utcnow()
+                started_at=datetime.utcnow(),
+                runbook_url="https://docs.voicehive.com/runbooks/test"
             )
-            
+
             result = await channel.send_alert(alert)
             assert result is True
             mock_post.assert_called_once()
+
+            # Validate the API call payload follows official PagerDuty Events API v2 spec
+            call_args = mock_post.call_args
+            payload = call_args[1]['json']
+
+            # Validate required fields per official docs
+            assert payload["routing_key"] == integration_key
+            assert payload["event_action"] == "trigger"
+            assert payload["dedup_key"] == "test-alert-456"
+
+            # Validate payload structure per official docs
+            assert "summary" in payload["payload"]
+            assert "source" in payload["payload"]
+            assert "severity" in payload["payload"]
+            assert "timestamp" in payload["payload"]
+            assert "component" in payload["payload"]
+            assert "group" in payload["payload"]
+            assert "class" in payload["payload"]
+            assert "custom_details" in payload["payload"]
+
+            # Validate severity mapping
+            assert payload["payload"]["severity"] == "critical"
+
+            # Validate source format
+            assert payload["payload"]["source"] == "voicehive-hotels.orchestrator"
+
+            # Validate client information per official docs
+            assert payload["client"] == "VoiceHive Hotels Orchestrator"
+            assert payload["client_url"] == "https://voicehive-hotels.eu"
+
+    @pytest.mark.asyncio
+    async def test_pagerduty_health_check(self):
+        """Test PagerDuty health check functionality"""
+        integration_key = "test-integration-key-32chars-long"
+        channel = PagerDutyNotificationChannel(integration_key)
+
+        # Mock successful health check
+        with patch('aiohttp.ClientSession.post') as mock_post:
+            mock_response = Mock()
+            mock_response.status = 202
+            mock_post.return_value.__aenter__.return_value = mock_response
+
+            health_data = await channel.health_check()
+
+            assert health_data["status"] == "healthy"
+            assert health_data["service"] == "pagerduty"
+            assert health_data["integration_key_valid"] is True
+            assert "response_time_ms" in health_data
+            assert health_data["api_url"] == "https://events.pagerduty.com/v2/enqueue"
+            assert health_data["test_event_sent"] is True
+
+    @pytest.mark.asyncio
+    async def test_pagerduty_acknowledge_resolve(self):
+        """Test PagerDuty acknowledge and resolve functionality"""
+        integration_key = "test-integration-key-32chars-long"
+        channel = PagerDutyNotificationChannel(integration_key)
+
+        # Mock successful acknowledge
+        with patch('aiohttp.ClientSession.post') as mock_post:
+            mock_response = Mock()
+            mock_response.status = 202
+            mock_post.return_value.__aenter__.return_value = mock_response
+
+            # Test acknowledge
+            result = await channel.acknowledge_alert("test-alert-123")
+            assert result is True
+
+            # Verify acknowledge payload format
+            call_args = mock_post.call_args
+            payload = call_args[1]['json']
+            assert payload["routing_key"] == integration_key
+            assert payload["event_action"] == "acknowledge"
+            assert payload["dedup_key"] == "test-alert-123"
+
+            # Test resolve
+            result = await channel.resolve_alert("test-alert-123")
+            assert result is True
+
+            # Verify resolve payload format
+            call_args = mock_post.call_args
+            payload = call_args[1]['json']
+            assert payload["routing_key"] == integration_key
+            assert payload["event_action"] == "resolve"
+            assert payload["dedup_key"] == "test-alert-123"
 
 
 class TestDistributedTracing:

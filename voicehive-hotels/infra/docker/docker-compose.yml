@@ -82,41 +82,37 @@ services:
     networks:
       - voicehive
 
-  # NVIDIA Riva Server (ASR/TTS)
-  riva-server:
-    image: nvcr.io/nvidia/riva/riva-speech:2.13.0-server
-    container_name: voicehive-riva
-    command: start-riva --nlp_service=false --asr_service=true --tts_service=true
+  # NVIDIA Granary ASR Service (Sprint 3 - 25 EU Languages)
+  granary-proxy:
+    build:
+      context: ../../services/asr/granary-proxy
+      dockerfile: Dockerfile
+    container_name: voicehive-granary-proxy
+    environment:
+      - GRANARY_MODEL_NAME=nvidia/parakeet-tdt-0.6b-v3
+      - GRANARY_CACHE_DIR=/tmp/granary_models
+      - GRANARY_DEVICE=cpu  # Use 'cuda' for GPU acceleration in production
+      - GRANARY_BATCH_SIZE=1
+      - PYTHONUNBUFFERED=1
     volumes:
-      - riva-model-repo:/data
+      - granary-model-cache:/tmp/granary_models
     ports:
-      - "50051:50051"  # gRPC
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - "51052:51052"  # Granary ASR HTTP/WebSocket API
     networks:
       - voicehive
     restart: unless-stopped
-
-  # Riva Proxy (Simplified API)
-  riva-proxy:
-    build:
-      context: ../../services/asr/riva-proxy
-      dockerfile: Dockerfile
-    container_name: voicehive-riva-proxy
-    environment:
-      - RIVA_SERVER_HOST=riva-server
-      - RIVA_SERVER_PORT=50051
-    ports:
-      - "51051:51051"  # HTTP/WebSocket API
-    depends_on:
-      - riva-server
-    networks:
-      - voicehive
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:51052/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s  # Allow time for model download
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
 
   # TTS Router
   tts-router:
@@ -206,7 +202,7 @@ services:
 
   # HashiCorp Vault
   vault:
-    image: vault:latest
+    image: hashicorp/vault:latest
     container_name: voicehive-vault
     cap_add:
       - IPC_LOCK
@@ -285,7 +281,7 @@ networks:
 volumes:
   redis-data:
   postgres-data:
-  riva-model-repo:
+  granary-model-cache:
   prometheus-data:
   grafana-data:
   loki-data:

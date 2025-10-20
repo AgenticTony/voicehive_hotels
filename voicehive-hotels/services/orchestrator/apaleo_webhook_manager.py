@@ -28,7 +28,7 @@ class WebhookSubscription(BaseModel):
 
 
 class ApaleoWebhookManager:
-    """Manages Apaleo webhook subscriptions"""
+    """Manages Apaleo webhook subscriptions with optimized connection pooling"""
 
     def __init__(self):
         self.base_url = "https://webhook.apaleo.com/v1"
@@ -46,27 +46,73 @@ class ApaleoWebhookManager:
         if not self.webhook_secret:
             logger.warning("apaleo_webhook_secret_missing")
 
+        # Initialize persistent HTTP client with optimized connection pooling
+        # Webhook operations are infrequent but benefit from connection reuse
+        webhook_connection_limits = httpx.Limits(
+            max_keepalive_connections=3,   # Small pool for webhook operations
+            max_connections=10,            # Limited connections for webhook management
+            keepalive_expiry=45.0          # Keep connections alive for webhook clusters
+        )
+
+        webhook_timeout_config = httpx.Timeout(
+            connect=10.0,    # Connection timeout for webhook endpoints
+            read=30.0,       # Read timeout for webhook operations
+            write=15.0,      # Write timeout for webhook creation/updates
+            pool=3.0         # Quick pool acquisition for webhook management
+        )
+
+        self._client = httpx.AsyncClient(
+            timeout=webhook_timeout_config,
+            limits=webhook_connection_limits,
+            headers={
+                "User-Agent": "VoiceHive-Webhook-Manager/1.0",
+                "Accept": "application/json",
+                "Connection": "keep-alive"
+            },
+            http2=True
+        )
+
+        logger.info(
+            "apaleo_webhook_manager_initialized",
+            max_keepalive=webhook_connection_limits.max_keepalive_connections,
+            max_connections=webhook_connection_limits.max_connections,
+            keepalive_expiry=webhook_connection_limits.keepalive_expiry
+        )
+
     async def _get_access_token(self) -> str:
-        """Get OAuth access token for Apaleo API"""
+        """Get OAuth access token for Apaleo API using persistent client"""
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    "https://identity.apaleo.com/connect/token",
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                    data={
-                        "grant_type": "client_credentials",
-                        "client_id": self.client_id,
-                        "client_secret": self.client_secret,
-                        "scope": "webhook:manage"  # Webhook management scope
-                    }
-                )
-                response.raise_for_status()
-                token_data = response.json()
-                return token_data["access_token"]
+            response = await self._client.post(
+                "https://identity.apaleo.com/connect/token",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                    "scope": "webhook:manage"  # Webhook management scope
+                }
+            )
+            response.raise_for_status()
+            token_data = response.json()
+            return token_data["access_token"]
 
         except Exception as e:
             logger.error("apaleo_token_error", error=str(e))
             raise
+
+    async def close(self):
+        """Close the HTTP client and clean up resources"""
+        if self._client:
+            await self._client.aclose()
+            logger.info("apaleo_webhook_manager_client_closed")
+
+    async def __aenter__(self):
+        """Async context manager entry"""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit"""
+        await self.close()
 
     async def create_webhook_subscription(
         self,
@@ -103,23 +149,21 @@ class ApaleoWebhookManager:
             if property_ids:
                 subscription_data["propertyIds"] = property_ids
 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.base_url}/subscriptions",
-                    headers={
-                        "Authorization": f"Bearer {access_token}",
-                        "Content-Type": "application/json"
-                    },
-                    json=subscription_data,
-                    timeout=30.0
-                )
+            response = await self._client.post(
+                f"{self.base_url}/subscriptions",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json"
+                },
+                json=subscription_data
+            )
 
-                response.raise_for_status()
-                subscription_response = response.json()
+            response.raise_for_status()
+            subscription_response = response.json()
 
-                subscription = WebhookSubscription(**subscription_response)
+            subscription = WebhookSubscription(**subscription_response)
 
-                logger.info(
+            logger.info(
                     "apaleo_webhook_subscription_created",
                     subscription_id=subscription.id,
                     endpoint_url=subscription.endpointUrl,
@@ -138,19 +182,17 @@ class ApaleoWebhookManager:
         try:
             access_token = await self._get_access_token()
 
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.base_url}/subscriptions",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    timeout=30.0
-                )
+            response = await self._client.get(
+                f"{self.base_url}/subscriptions",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
 
-                response.raise_for_status()
-                subscriptions_data = response.json()
+            response.raise_for_status()
+            subscriptions_data = response.json()
 
-                subscriptions = [
-                    WebhookSubscription(**sub)
-                    for sub in subscriptions_data.get("subscriptions", [])
+            subscriptions = [
+                WebhookSubscription(**sub)
+                for sub in subscriptions_data.get("subscriptions", [])
                 ]
 
                 logger.info(
@@ -190,8 +232,8 @@ class ApaleoWebhookManager:
             if property_ids:
                 subscription_data["propertyIds"] = property_ids
 
-            async with httpx.AsyncClient() as client:
-                response = await client.put(
+            # Use persistent client with connection pooling
+            response = await self._client.put(
                     f"{self.base_url}/subscriptions/{subscription_id}",
                     headers={
                         "Authorization": f"Bearer {access_token}",
@@ -225,8 +267,8 @@ class ApaleoWebhookManager:
         try:
             access_token = await self._get_access_token()
 
-            async with httpx.AsyncClient() as client:
-                response = await client.delete(
+            # Use persistent client with connection pooling
+            response = await self._client.delete(
                     f"{self.base_url}/subscriptions/{subscription_id}",
                     headers={"Authorization": f"Bearer {access_token}"},
                     timeout=30.0
@@ -289,9 +331,9 @@ class ApaleoWebhookManager:
     async def test_webhook_endpoint(self) -> bool:
         """Test that our webhook endpoint is accessible"""
         try:
-            async with httpx.AsyncClient() as client:
+            # Use persistent client with connection pooling
                 # Test with a health check-like request
-                response = await client.post(
+            response = await self._client.post(
                     f"{self.webhook_endpoint_base}/v1/apaleo/webhook",
                     json={
                         "id": "test-event",

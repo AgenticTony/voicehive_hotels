@@ -166,15 +166,85 @@ class SecurityConfig(BaseModel):
         return v
 
 
+class EmailConfig(BaseModel):
+    """Email notification configuration with strict validation"""
+
+    smtp_host: str = Field(..., description="SMTP server hostname - REQUIRED")
+    smtp_port: int = Field(..., ge=1, le=65535, description="SMTP server port - REQUIRED")
+    username: str = Field(..., min_length=1, description="SMTP username - REQUIRED")
+    password: str = Field(..., min_length=8, description="SMTP password - REQUIRED (min 8 chars)")
+    from_email: str = Field(..., description="Sender email address - REQUIRED")
+    from_name: str = Field(default="VoiceHive Hotels Alerts", description="Sender display name")
+    use_tls: bool = Field(default=True, description="Use direct TLS connection (port 465)")
+    start_tls: bool = Field(default=True, description="Upgrade to TLS using STARTTLS (port 587)")
+    timeout_seconds: int = Field(default=30, ge=5, le=120, description="SMTP connection timeout")
+
+    # Recipients for different alert severities
+    critical_recipients: List[str] = Field(default=[], description="Email addresses for critical alerts")
+    high_recipients: List[str] = Field(default=[], description="Email addresses for high priority alerts")
+    medium_recipients: List[str] = Field(default=[], description="Email addresses for medium priority alerts")
+    low_recipients: List[str] = Field(default=[], description="Email addresses for low priority alerts")
+    info_recipients: List[str] = Field(default=[], description="Email addresses for info alerts")
+    sla_recipients: List[str] = Field(default=[], description="Email addresses for SLA violations")
+
+    @field_validator('smtp_host')
+    @classmethod
+    def validate_smtp_host(cls, v):
+        # Ensure SMTP host is not localhost in production
+        if v.lower() in ['localhost', '127.0.0.1', '::1']:
+            raise ValueError('Localhost SMTP not allowed in production')
+        return v
+
+    @field_validator('from_email', 'critical_recipients', 'high_recipients',
+                   'medium_recipients', 'low_recipients', 'info_recipients', 'sla_recipients')
+    @classmethod
+    def validate_email_addresses(cls, v):
+        import re
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+
+        if isinstance(v, str):
+            # Single email address
+            if not re.match(email_pattern, v):
+                raise ValueError(f'Invalid email address: {v}')
+        elif isinstance(v, list):
+            # List of email addresses
+            for email in v:
+                if not re.match(email_pattern, email):
+                    raise ValueError(f'Invalid email address: {email}')
+        return v
+
+    @field_validator('password')
+    @classmethod
+    def validate_smtp_password(cls, v):
+        if len(v) < 8:
+            raise ValueError('SMTP password must be at least 8 characters')
+        # Check for weak passwords
+        weak_passwords = ['password', '12345678', 'admin123', 'smtp123']
+        if v.lower() in weak_passwords:
+            raise ValueError('Weak SMTP password detected - use secure password from vault')
+        return v
+
+    @field_validator('smtp_port')
+    @classmethod
+    def validate_smtp_port(cls, v):
+        # Common secure SMTP ports
+        secure_ports = [25, 465, 587, 2525]  # 25=plain, 465=TLS, 587=STARTTLS, 2525=alternative
+        if v not in secure_ports:
+            # Allow custom ports but log a warning
+            import logging
+            logging.warning(f"Non-standard SMTP port configured: {v}")
+        return v
+
+
 class ExternalServiceConfig(BaseModel):
     """External service configuration"""
-    
+
     livekit_url: str = Field(..., description="LiveKit server URL - REQUIRED")
     vault_url: str = Field(..., description="HashiCorp Vault URL - REQUIRED")
     pms_timeout_seconds: int = Field(default=30, ge=1, le=120, description="PMS timeout")
     tts_timeout_seconds: int = Field(default=15, ge=1, le=60, description="TTS timeout")
     asr_timeout_seconds: int = Field(default=30, ge=1, le=120, description="ASR timeout")
-    
+
     @field_validator('livekit_url', 'vault_url')
     @classmethod
     def validate_urls(cls, v):
@@ -212,6 +282,7 @@ class VoiceHiveConfig(BaseSettings):
     auth: AuthConfig = Field(..., description="Authentication configuration - REQUIRED")
     security: SecurityConfig = Field(..., description="Security configuration - REQUIRED")
     external_services: ExternalServiceConfig = Field(..., description="External services configuration - REQUIRED")
+    email: Optional[EmailConfig] = Field(None, description="Email notification configuration - OPTIONAL")
     
     # Configuration metadata
     config_version: str = Field(default="1.0", description="Configuration schema version")

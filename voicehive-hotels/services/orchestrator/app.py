@@ -150,7 +150,12 @@ async def startup_configuration():
     try:
         config = await initialize_secure_configuration()
         app._config = config
-        
+
+        # Initialize database
+        from database.connection import initialize_database
+        await initialize_database()
+        logger.info("database_connection_initialized")
+
         # Initialize authentication services with secure configuration
         redis_url = f"redis://{config.redis.host}:{config.redis.port}/{config.redis.db}"
         jwt_service = JWTService(redis_url=redis_url)
@@ -264,15 +269,20 @@ async def startup_drift_monitoring():
 
 @app.on_event("shutdown")
 async def shutdown_monitoring():
-    """Shutdown monitoring components"""
+    """Shutdown monitoring components and database"""
     try:
         from enhanced_alerting import enhanced_alerting
         await enhanced_alerting.stop()
-        
+
         # Flush any pending traces
         from distributed_tracing import enhanced_tracer
         enhanced_tracer.flush_traces()
-        
+
+        # Close database connections
+        from database.connection import close_database
+        await close_database()
+        logger.info("database_connections_closed")
+
         logger.info("monitoring_components_shutdown")
     except Exception as e:
         logger.error("monitoring_shutdown_failed", error=str(e))

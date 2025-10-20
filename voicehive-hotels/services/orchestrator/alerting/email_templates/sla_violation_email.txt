@@ -1,0 +1,94 @@
+🚨 SLA VIOLATION: {{ sla_name }}
+================================================================================
+
+⚠️  CRITICAL: SERVICE LEVEL AGREEMENT BREACHED  ⚠️
+
+Performance is {{ "%.1f"|format(violation_percentage) }}% below target
+Immediate attention and response required!
+
+SLA PERFORMANCE COMPARISON:
+---------------------------
+Current Performance: {{ "%.2f"|format(current_value) }}%
+Target SLA:         {{ "%.2f"|format(target_value) }}%
+Performance Gap:    -{{ "%.2f"|format(violation_percentage) }}%
+
+VIOLATION DETAILS:
+------------------
+SLA Name:           {{ sla_name }}
+Violation Detected: {{ formatted_time }}
+Violation Type:     Threshold Breach
+Severity:           CRITICAL
+
+BUSINESS IMPACT ASSESSMENT:
+---------------------------
+🎯 The following impacts may occur:
+
+• Customer experience may be degraded
+• Service quality below contractual obligations
+• Potential customer complaints or escalations
+• Revenue and reputation risk
+• Compliance and contractual penalties possible
+
+{% if details %}
+ADDITIONAL METRICS:
+-------------------
+{% for key, value in details.items() %}{{ key }}: {{ value }}
+{% endfor %}
+{% endif %}
+
+IMMEDIATE ACTIONS REQUIRED:
+---------------------------
+🚨 This SLA violation requires immediate response:
+
+1. 📊 Check SLA Dashboard: {{ dashboard_url }}
+2. 🎫 Create Incident: {{ dashboard_url }}/incidents/new
+3. 📈 Review SLA Details: {{ dashboard_url }}/sla/{{ sla_name }}
+
+ESCALATION PROTOCOL:
+--------------------
+⚡ This SLA violation has been automatically escalated according to your
+   incident response procedures. The on-call team has been notified and
+   should respond within 15 minutes.
+
+IMMEDIATE RESPONSE CHECKLIST:
+-----------------------------
+□ Verify the violation is not a false positive
+□ Check for active incidents or maintenance
+□ Contact the service owner immediately
+□ Document findings and actions taken
+□ Monitor for resolution and recovery
+
+TECHNICAL DETAILS:
+------------------
+Measurement Window: {{ details.measurement_window if details and details.measurement_window else 'N/A' }}
+Violation Time: {{ formatted_time }}
+Monitoring System: {{ company_name }} SLA Monitor
+
+NEXT STEPS:
+-----------
+1. Acknowledge this violation immediately
+2. Investigate root cause of performance degradation
+3. Implement corrective measures
+4. Monitor recovery to target levels
+5. Document incident for future prevention
+6. Review SLA thresholds if necessary
+
+SUPPORT CONTACTS:
+-----------------
+📞 Emergency Escalation: +1-XXX-XXX-XXXX
+📧 SLA Team: sla-team@voicehive-hotels.eu
+🔗 Incident Portal: {{ dashboard_url }}/incidents
+
+================================================================================
+{{ company_name }} - SLA Monitoring and Compliance System
+
+🚨 URGENT: This SLA violation notification was generated automatically based on
+performance thresholds. Immediate attention and response are required to restore
+service levels and maintain customer satisfaction.
+
+Do not ignore this notification - SLA breaches can have significant business impact.
+
+Dashboard: {{ dashboard_url }}
+Documentation: https://docs.voicehive-hotels.eu/sla-management
+Escalation Procedures: https://docs.voicehive-hotels.eu/incident-response
+================================================================================

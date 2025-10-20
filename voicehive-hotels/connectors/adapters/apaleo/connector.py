@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
+import redis.asyncio as aioredis
 
 from ...contracts import (
     BaseConnector,
@@ -26,6 +27,20 @@ from ...contracts import (
     Reservation,
 )
 from ...utils.logging import log_performance
+
+# Import circuit breaker from resilience infrastructure
+try:
+    import sys
+    import os
+    # Add orchestrator path to import circuit breaker
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'services', 'orchestrator'))
+    from resilience.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitBreakerOpenError, CircuitBreakerTimeoutError
+except ImportError:
+    # Fallback - circuit breaker not available
+    CircuitBreaker = None
+    CircuitBreakerConfig = None
+    CircuitBreakerOpenError = Exception
+    CircuitBreakerTimeoutError = Exception
 
 
 class ApaleoConnector(BaseConnector):
@@ -58,16 +73,83 @@ class ApaleoConnector(BaseConnector):
         self._access_token = None
         self._token_expires_at = None
 
+        # Initialize circuit breakers if available
+        self._circuit_breakers = {}
+        if CircuitBreaker is not None:
+            # Get Redis client from config (optional)
+            redis_client = None
+            if "redis_url" in config:
+                try:
+                    redis_client = aioredis.from_url(config["redis_url"])
+                except Exception as e:
+                    if hasattr(self.logger, "warning"):
+                        self.logger.warning(f"Failed to connect to Redis for circuit breaker: {e}")
+
+            # Circuit breaker for authentication
+            auth_config = CircuitBreakerConfig(
+                name="apaleo_auth",
+                failure_threshold=3,  # Fail fast for auth issues
+                recovery_timeout=120,  # 2 minutes recovery for auth
+                timeout=15.0,  # Auth should be fast
+                expected_exception=(httpx.HTTPStatusError, httpx.RequestError, AuthenticationError)
+            )
+            self._circuit_breakers["auth"] = CircuitBreaker(auth_config, redis_client)
+
+            # Circuit breaker for API calls
+            api_config = CircuitBreakerConfig(
+                name="apaleo_api",
+                failure_threshold=5,  # More tolerant for API calls
+                recovery_timeout=60,  # 1 minute recovery for API
+                timeout=30.0,  # API calls can take longer
+                expected_exception=(httpx.HTTPStatusError, httpx.RequestError, PMSError, RateLimitError)
+            )
+            self._circuit_breakers["api"] = CircuitBreaker(api_config, redis_client)
+
+            if hasattr(self.logger, "info"):
+                self.logger.info("Apaleo circuit breakers initialized",
+                               auth_threshold=auth_config.failure_threshold,
+                               api_threshold=api_config.failure_threshold)
+
     async def connect(self):
-        """Establish connection and get access token"""
+        """Establish connection and get access token with optimized connection pooling"""
+        # Configure connection limits based on official httpx documentation
+        # Optimized for PMS API usage patterns - moderate concurrency with keepalive
+        connection_limits = httpx.Limits(
+            max_keepalive_connections=10,  # Keep 10 connections alive for reuse
+            max_connections=25,            # Maximum total connections for PMS operations
+            keepalive_expiry=30.0         # Keep connections alive for 30 seconds
+        )
+
+        # Create timeout configuration for different operation types
+        timeout_config = httpx.Timeout(
+            connect=10.0,    # Connection establishment timeout
+            read=30.0,       # Read timeout for API responses
+            write=10.0,      # Write timeout for API requests
+            pool=5.0         # Pool acquisition timeout
+        )
+
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
-            timeout=30.0,
+            timeout=timeout_config,
+            limits=connection_limits,
             headers={
                 "User-Agent": "VoiceHive-Hotels/1.0",
                 "Accept": "application/json",
+                "Connection": "keep-alive",  # Enable connection reuse
             },
+            # Enable HTTP/2 if supported by the PMS
+            http2=True,
         )
+
+        if hasattr(self.logger, "info"):
+            self.logger.info(
+                "apaleo_connection_pool_configured",
+                max_keepalive=connection_limits.max_keepalive_connections,
+                max_connections=connection_limits.max_connections,
+                keepalive_expiry=connection_limits.keepalive_expiry,
+                http2_enabled=True
+            )
+
         await self._authenticate()
 
     async def disconnect(self):
@@ -76,7 +158,9 @@ class ApaleoConnector(BaseConnector):
             await self._client.aclose()
 
     async def _authenticate(self):
-        """Get OAuth2 access token"""
+        """Get OAuth2 access token with circuit breaker protection"""
+        import base64
+
         auth_url = "https://identity.apaleo.com/connect/token"
 
         # Log authentication attempt without exposing credentials
@@ -88,14 +172,20 @@ class ApaleoConnector(BaseConnector):
                 else "None",
             )
 
-        try:
+        async def _do_auth():
+            """Inner authentication function for circuit breaker"""
+            # Prepare Basic Authentication header as required by Apaleo
+            credentials = f"{self.client_id}:{self.client_secret}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
             response = await self._client.post(
                 auth_url,
+                headers={
+                    "Authorization": f"Basic {encoded_credentials}",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
                 data={
                     "grant_type": "client_credentials",
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                    "scope": "availability.read rateplan.read booking.read booking.write distribution:reservations.manage webhook:manage payment:read payment:write pay:payment",
                 },
             )
             response.raise_for_status()
@@ -115,6 +205,27 @@ class ApaleoConnector(BaseConnector):
                     expires_in=data.get("expires_in", 3600),
                 )
 
+            return data
+
+        try:
+            # Use circuit breaker if available
+            if "auth" in self._circuit_breakers:
+                await self._circuit_breakers["auth"].call(_do_auth)
+            else:
+                await _do_auth()
+
+        except CircuitBreakerOpenError as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("Authentication circuit breaker is open",
+                                circuit_name=e.circuit_name,
+                                next_attempt=e.next_attempt_time)
+            raise AuthenticationError(f"Authentication service unavailable: {e}")
+
+        except CircuitBreakerTimeoutError as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("Authentication timed out", error=str(e))
+            raise AuthenticationError(f"Authentication timeout: {e}")
+
         except httpx.HTTPStatusError as e:
             if hasattr(self.logger, "error"):
                 self.logger.error(
@@ -122,6 +233,11 @@ class ApaleoConnector(BaseConnector):
                     status_code=e.response.status_code,
                 )
             raise AuthenticationError(f"Failed to authenticate with Apaleo: {e}")
+
+        except Exception as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("Unexpected authentication error", error=str(e))
+            raise AuthenticationError(f"Authentication error: {e}")
 
     async def _ensure_authenticated(self):
         """Ensure we have a valid token"""
@@ -135,77 +251,139 @@ class ApaleoConnector(BaseConnector):
         stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10)
     )
     async def _request(self, method: str, path: str, **kwargs):
-        """Make authenticated request with retry logic"""
+        """Make authenticated request with circuit breaker and retry logic"""
         await self._ensure_authenticated()
 
-        # Log request details (URL is sanitized automatically)
-        if hasattr(self.logger, "log_api_call"):
+        async def _do_request():
+            """Inner request function for circuit breaker"""
+            # Log request details (URL is sanitized automatically)
             start_time = datetime.now(timezone.utc)
 
-        try:
-            response = await self._client.request(method, path, **kwargs)
+            try:
+                response = await self._client.request(method, path, **kwargs)
 
-            if response.status_code == 429:
-                retry_after = int(response.headers.get("Retry-After", 60))
-                if hasattr(self.logger, "warning"):
-                    self.logger.warning(
-                        f"Rate limit hit for {method} {path}", retry_after=retry_after
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get("Retry-After", 60))
+                    if hasattr(self.logger, "warning"):
+                        self.logger.warning(
+                            f"Rate limit hit for {method} {path}", retry_after=retry_after
+                        )
+                    e = RateLimitError(f"Rate limit exceeded, retry after {retry_after}s")
+                    setattr(e, "retry_after", retry_after)
+                    raise e
+
+                response.raise_for_status()
+
+                # Log successful request
+                if hasattr(self.logger, "log_api_call"):
+                    duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                    self.logger.log_api_call(
+                        operation=f"{method} {path}",
+                        status_code=response.status_code,
+                        duration_ms=duration_ms,
                     )
-                e = RateLimitError(f"Rate limit exceeded, retry after {retry_after}s")
-                setattr(e, "retry_after", retry_after)
-                raise e
 
-            response.raise_for_status()
+                return response.json() if response.content else None
 
-            # Log successful request
-            if hasattr(self.logger, "log_api_call"):
-                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
-                self.logger.log_api_call(
-                    operation=f"{method} {path}",
-                    status_code=response.status_code,
-                    duration_ms=duration_ms,
-                )
+            except httpx.HTTPStatusError as e:
+                # Log error
+                if hasattr(self.logger, "log_api_call"):
+                    duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                    self.logger.log_api_call(
+                        operation=f"{method} {path}",
+                        status_code=e.response.status_code,
+                        duration_ms=duration_ms,
+                        error=e,
+                    )
 
-            return response.json() if response.content else None
+                if e.response.status_code == 401:
+                    # Token might have expired, try re-authenticating
+                    await self._authenticate()
+                    raise AuthenticationError("Authentication failed")
+                elif e.response.status_code == 404:
+                    raise NotFoundError(f"Resource not found: {path}")
+                elif e.response.status_code == 422:
+                    raise ValidationError(f"Validation error: {e.response.text}")
+                else:
+                    raise PMSError(f"API error: {e}")
 
-        except httpx.HTTPStatusError as e:
-            # Log error
-            if hasattr(self.logger, "log_api_call"):
-                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
-                self.logger.log_api_call(
-                    operation=f"{method} {path}",
-                    status_code=e.response.status_code,
-                    duration_ms=duration_ms,
-                    error=e,
-                )
-
-            if e.response.status_code == 401:
-                # Token might have expired, try re-authenticating
-                await self._authenticate()
-                raise AuthenticationError("Authentication failed")
-            elif e.response.status_code == 404:
-                raise NotFoundError(f"Resource not found: {path}")
-            elif e.response.status_code == 422:
-                raise ValidationError(f"Validation error: {e.response.text}")
+        try:
+            # Use circuit breaker if available, otherwise fallback to direct call
+            if "api" in self._circuit_breakers:
+                return await self._circuit_breakers["api"].call(_do_request)
             else:
-                raise PMSError(f"API error: {e}")
+                return await _do_request()
+
+        except CircuitBreakerOpenError as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("Apaleo API circuit breaker is open",
+                                circuit_name=e.circuit_name,
+                                next_attempt=e.next_attempt_time,
+                                operation=f"{method} {path}")
+            raise PMSError(f"Apaleo API unavailable: {e}")
+
+        except CircuitBreakerTimeoutError as e:
+            if hasattr(self.logger, "error"):
+                self.logger.error("Apaleo API request timed out",
+                                error=str(e),
+                                operation=f"{method} {path}")
+            raise PMSError(f"Apaleo API timeout: {e}")
+
+    async def get_circuit_breaker_stats(self) -> Dict[str, Any]:
+        """Get circuit breaker statistics"""
+        stats = {}
+        if self._circuit_breakers:
+            for name, breaker in self._circuit_breakers.items():
+                try:
+                    breaker_stats = await breaker.get_stats()
+                    stats[name] = {
+                        "state": breaker_stats.state.value,
+                        "failure_count": breaker_stats.failure_count,
+                        "success_count": breaker_stats.success_count,
+                        "total_requests": breaker_stats.total_requests,
+                        "total_failures": breaker_stats.total_failures,
+                        "total_successes": breaker_stats.total_successes,
+                        "last_failure_time": breaker_stats.last_failure_time.isoformat() if breaker_stats.last_failure_time else None,
+                        "last_success_time": breaker_stats.last_success_time.isoformat() if breaker_stats.last_success_time else None,
+                        "next_attempt_time": breaker_stats.next_attempt_time.isoformat() if breaker_stats.next_attempt_time else None,
+                    }
+                except Exception as e:
+                    stats[name] = {"error": f"Failed to get stats: {e}"}
+        return stats
 
     @log_performance("health_check")
     async def health_check(self) -> Dict[str, Any]:
-        """Check Apaleo API health"""
+        """Check Apaleo API health with circuit breaker information"""
         token_valid = bool(self._access_token) and (
             self._token_expires_at is not None
             and datetime.now(timezone.utc).timestamp() < self._token_expires_at
         )
+
+        # Get circuit breaker statistics
+        circuit_breaker_stats = await self.get_circuit_breaker_stats()
+
         try:
-            # Try to get property info as health check
-            await self._request("GET", f"/properties/v1/properties/{self.property_id}")
+            # Try to get property info as health check using correct Inventory API endpoint
+            await self._request("GET", f"/inventory/v1/properties/{self.property_id}")
             return {
                 "status": "healthy",
                 "vendor": "apaleo",
                 "property_id": self.property_id,
                 "property_accessible": True,
                 "token_valid": token_valid,
+                "circuit_breakers": circuit_breaker_stats,
+                "circuit_breaker_enabled": len(self._circuit_breakers) > 0,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        except CircuitBreakerOpenError as e:
+            return {
+                "status": "degraded",
+                "vendor": "apaleo",
+                "error": f"Circuit breaker open: {e}",
+                "property_accessible": False,
+                "token_valid": token_valid,
+                "circuit_breakers": circuit_breaker_stats,
+                "circuit_breaker_enabled": len(self._circuit_breakers) > 0,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         except Exception as e:
@@ -215,35 +393,23 @@ class ApaleoConnector(BaseConnector):
                 "error": str(e),
                 "property_accessible": False,
                 "token_valid": token_valid,
+                "circuit_breakers": circuit_breaker_stats,
+                "circuit_breaker_enabled": len(self._circuit_breakers) > 0,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
     async def get_availability(
         self, hotel_id: str, start: date, end: date, room_type: Optional[str] = None
     ) -> AvailabilityGrid:
-        """Get room availability using official Apaleo endpoints"""
+        """Get room availability using correct Apaleo availability endpoints"""
         property_id = hotel_id or self.property_id
 
-        # Build params with correct parameter names for official API
-        availability_params = {
-            "from": start.isoformat(),
-            "to": end.isoformat(),
-            "propertyIds": property_id
-        }
-        if room_type:
-            availability_params["unitGroupIds"] = room_type
-
-        # Get unit groups (room types) using correct endpoint and params
+        # Get unit groups (room types) using inventory endpoint for static data
         unit_groups = await self._request(
             "GET", "/inventory/v1/unit-groups", params={"propertyIds": property_id}
         )
 
-        # Get availability using official endpoint
-        availability_data = await self._request(
-            "GET", "/availability/v1/availability", params=availability_params
-        )
-
-        # Map to our domain model
+        # Map to our domain model first
         room_types = []
         for ug in unit_groups.get("unitGroups", []):
             room_types.append(
@@ -257,31 +423,88 @@ class ApaleoConnector(BaseConnector):
                 )
             )
 
-        # Parse availability grid
+        # Use correct availability endpoint: /availability/v1/unit-groups
+        # This endpoint uses date format, not datetime
+        unit_groups_availability_params = {
+            "propertyId": property_id,
+            "from": start.isoformat(),
+            "to": end.isoformat()
+        }
+        if room_type:
+            unit_groups_availability_params["unitGroupIds"] = room_type
+
+        try:
+            # Get availability using correct endpoint
+            availability_data = await self._request(
+                "GET", "/availability/v1/unit-groups", params=unit_groups_availability_params
+            )
+        except (NotFoundError, PMSError) as e:
+            # If availability endpoint fails, log warning and return empty availability
+            if hasattr(self.logger, "warning"):
+                self.logger.warning(
+                    f"Availability endpoint failed, returning empty availability: {e}",
+                    property_id=property_id
+                )
+            availability_data = {"timeSlices": []}
+
+        # Parse availability grid from timeSlices format
         availability_by_date = {}
-        
-        # Support both response formats
-        if "availableUnitItems" in availability_data:
-            # Aggregate format (what our fixtures return)
-            # We'll distribute the available count across all dates in the range
-            current = start
-            while current <= end:
-                availability_by_date[current] = {}
-                for item in availability_data.get("availableUnitItems", []):
-                    unit_group_id = item["unitGroup"]["id"]
-                    available_count = item.get("availableCount", 0)
-                    availability_by_date[current][unit_group_id] = available_count
+
+        # Process timeSlices data from /availability/v1/unit-groups
+        for time_slice in availability_data.get("timeSlices", []):
+            slice_from = time_slice.get("from")
+            slice_to = time_slice.get("to")
+
+            if not slice_from or not slice_to:
+                continue
+
+            # Parse dates from the time slice
+            slice_start = self.normalize_date(slice_from)
+            slice_end = self.normalize_date(slice_to)
+
+            # Initialize dates in range if not already present
+            current = slice_start
+            while current <= slice_end and current <= end:
+                if current >= start and current not in availability_by_date:
+                    availability_by_date[current] = {}
                 current = current + timedelta(days=1)
-        elif "availability" in availability_data:
-            # Per-day format (original expectation)
-            for avail in availability_data.get("availability", []):
-                date_str = avail["date"]
-                avail_date = self.normalize_date(date_str)
 
-                if avail_date not in availability_by_date:
-                    availability_by_date[avail_date] = {}
+            # Process unit groups in this time slice
+            for unit_group in time_slice.get("unitGroups", []):
+                unit_group_id = unit_group.get("id")
+                available_count = unit_group.get("available", 0)
 
-                availability_by_date[avail_date][avail["unitGroupId"]] = avail["available"]
+                if unit_group_id:
+                    # Apply availability to all dates in this time slice
+                    current = slice_start
+                    while current <= slice_end and current <= end:
+                        if current >= start:
+                            if current not in availability_by_date:
+                                availability_by_date[current] = {}
+                            availability_by_date[current][unit_group_id] = available_count
+                        current = current + timedelta(days=1)
+
+        # Ensure all dates in range have entries, even if empty
+        current = start
+        while current <= end:
+            if current not in availability_by_date:
+                availability_by_date[current] = {}
+                # Set 0 availability for all room types if no data
+                for room_type_obj in room_types:
+                    availability_by_date[current][room_type_obj.code] = 0
+            current = current + timedelta(days=1)
+
+        # Log successful availability retrieval
+        if hasattr(self.logger, "info"):
+            total_slices = len(availability_data.get("timeSlices", []))
+            date_count = len(availability_by_date)
+            self.logger.info(
+                "Retrieved availability using production endpoint",
+                property_id=property_id,
+                time_slices=total_slices,
+                date_range_days=date_count,
+                endpoint="/availability/v1/unit-groups"
+            )
 
         # Get restrictions for the date range
         restrictions = await self._get_restrictions(property_id, start, end)
@@ -750,32 +973,40 @@ class ApaleoConnector(BaseConnector):
                             )
                         continue
 
-            # Also check inventory availability for stop-sell status
+            # Also check unit group availability for stop-sell status
             try:
                 inventory_data = await self._request(
                     "GET",
-                    "/availability/v1/availability",
+                    "/availability/v1/unit-groups",
                     params={
-                        "propertyIds": property_id,
+                        "propertyId": property_id,
                         "from": start.isoformat(),
                         "to": end.isoformat()
                     }
                 )
 
                 # Process availability data for stop-sell indicators
-                if inventory_data and "availabilities" in inventory_data:
-                    for avail_entry in inventory_data["availabilities"]:
-                        avail_date_str = avail_entry.get("date")
-                        if avail_date_str:
-                            avail_date = self.normalize_date(avail_date_str)
-                            if start <= avail_date <= end and avail_date in restrictions:
-                                # If total available is 0, consider it stop-sell
-                                total_available = sum(
-                                    item.get("availableUnits", 0)
-                                    for item in avail_entry.get("availabilityItems", [])
-                                )
-                                if total_available == 0:
-                                    restrictions[avail_date]["stop_sell"] = True
+                if inventory_data and "timeSlices" in inventory_data:
+                    for time_slice in inventory_data["timeSlices"]:
+                        slice_from = time_slice.get("from")
+                        slice_to = time_slice.get("to")
+
+                        if slice_from and slice_to:
+                            slice_start = self.normalize_date(slice_from)
+                            slice_end = self.normalize_date(slice_to)
+
+                            # Check each date in this time slice
+                            current_date = slice_start
+                            while current_date <= slice_end and current_date <= end:
+                                if current_date >= start and current_date in restrictions:
+                                    # If total available across all unit groups is 0, consider it stop-sell
+                                    total_available = sum(
+                                        unit_group.get("available", 0)
+                                        for unit_group in time_slice.get("unitGroups", [])
+                                    )
+                                    if total_available == 0:
+                                        restrictions[current_date]["stop_sell"] = True
+                                current_date += timedelta(days=1)
 
             except Exception as availability_error:
                 # Log but continue - availability check is supplementary
@@ -863,51 +1094,8 @@ class ApaleoConnector(BaseConnector):
                                 return f"Free cancellation until {deadline}"
                         return "Free cancellation up to arrival"
 
-            # Try to get detailed booking conditions from the Booking API
-            try:
-                booking_conditions = await self._request(
-                    "GET",
-                    f"/booking/v1/rate-plans/{rate_code}/booking-conditions",
-                    params={
-                        "propertyId": property_id,
-                        "arrival": arrival.isoformat(),
-                        "departure": departure.isoformat()
-                    }
-                )
-
-                if booking_conditions and "cancellationPolicy" in booking_conditions:
-                    policy = booking_conditions["cancellationPolicy"]
-
-                    # Extract policy description from booking conditions
-                    description = policy.get("description")
-                    if description:
-                        return description
-
-                    # Parse structured policy from booking conditions
-                    if policy.get("nonRefundable") is True:
-                        return "Non-refundable booking"
-
-                    cancellation_fees = policy.get("cancellationFees", [])
-                    if cancellation_fees:
-                        fee_texts = []
-                        for fee in cancellation_fees:
-                            deadline = fee.get("deadline", "")
-                            fee_amount = fee.get("fee", {})
-                            if fee_amount.get("type") == "Percentage":
-                                percentage = fee_amount.get("value", 0)
-                                fee_texts.append(f"{percentage}% fee from {deadline}")
-                            elif fee_amount.get("type") == "FixedAmount":
-                                amount = fee_amount.get("amount", 0)
-                                currency = fee_amount.get("currency", "EUR")
-                                fee_texts.append(f"{amount} {currency} fee from {deadline}")
-
-                        if fee_texts:
-                            return "Cancellation fees: " + "; ".join(fee_texts)
-
-            except Exception as booking_error:
-                # Log but continue with fallback
-                if hasattr(self.logger, "debug"):
-                    self.logger.debug(f"Could not fetch booking conditions: {booking_error}")
+            # NOTE: /booking/v1/rate-plans/{id}/booking-conditions endpoint does not exist in Apaleo API
+            # Removed non-existent booking conditions lookup - using rate plan data only
 
             # Final fallback based on typical hotel policies
             return "Free cancellation until 6 PM on arrival day"
@@ -922,67 +1110,82 @@ class ApaleoConnector(BaseConnector):
                 )
             return "Free cancellation until 6 PM on arrival day"
 
-    # Apaleo Pay Integration Methods (Sprint 3 Enhancement)
-    async def create_payment_account(self, guest_profile: GuestProfile, payment_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create payment account for guest using Apaleo Pay"""
+    # Apaleo Finance API Integration Methods (Fixed from non-existent /pay/v1/ endpoints)
+    async def get_folio_from_reservation(self, reservation_id: str) -> Dict[str, Any]:
+        """Get folio details from reservation using Finance API"""
         try:
-            payment_account_data = {
-                "accountNumber": payment_data.get("card_number"),
-                "accountHolder": f"{guest_profile.first_name} {guest_profile.last_name}",
-                "expiryMonth": payment_data.get("expiry_month"),
-                "expiryYear": payment_data.get("expiry_year"),
-                "paymentMethod": payment_data.get("payment_method", "visa"),
-                "payerEmail": guest_profile.email,
-                "payerReference": payment_data.get("payer_reference"),
-                "isVirtual": payment_data.get("is_virtual", False)
-            }
+            # First get the reservation to extract folio information
+            reservation = await self._request("GET", f"/booking/v1/bookings/{reservation_id}")
 
-            # Create payment account via Apaleo Pay API
-            result = await self._request(
-                "POST",
-                "/pay/v1/payment-accounts",
-                json=payment_account_data
+            # Get property ID from reservation
+            property_id = reservation.get("property", {}).get("id") or self.property_id
+
+            # Get all folios for the property and filter by reservation
+            folios = await self._request(
+                "GET",
+                "/finance/v1/folios",
+                params={"propertyIds": property_id}
             )
 
-            if hasattr(self.logger, "info"):
-                self.logger.info(
-                    "apaleo_payment_account_created",
-                    account_id=result.get("id"),
-                    payer_email=guest_profile.email
-                )
+            # Find folio that matches this reservation
+            for folio in folios.get("folios", []):
+                if folio.get("reservationId") == reservation_id:
+                    if hasattr(self.logger, "info"):
+                        self.logger.info(
+                            "folio_found_for_reservation",
+                            reservation_id=reservation_id,
+                            folio_id=folio.get("id")
+                        )
+                    return folio
 
-            return result
+            # If no folio found, this might be a new reservation without charges yet
+            if hasattr(self.logger, "warning"):
+                self.logger.warning(
+                    "no_folio_found_for_reservation",
+                    reservation_id=reservation_id
+                )
+            raise NotFoundError(f"No folio found for reservation {reservation_id}")
 
         except Exception as e:
             if hasattr(self.logger, "error"):
-                self.logger.error("apaleo_payment_account_creation_error", error=str(e))
-            raise PMSError(f"Failed to create payment account: {e}")
+                self.logger.error("folio_lookup_error", reservation_id=reservation_id, error=str(e))
+            raise PMSError(f"Failed to get folio for reservation: {e}")
 
     async def authorize_payment(self, reservation_id: str, amount: Decimal, currency: str = "EUR") -> Dict[str, Any]:
-        """Authorize payment for reservation using Apaleo Pay"""
+        """Create payment authorization on folio using Finance API"""
         try:
-            authorization_data = {
-                "reservationId": reservation_id,
+            # Get folio for this reservation
+            folio = await self.get_folio_from_reservation(reservation_id)
+            folio_id = folio.get("id")
+
+            if not folio_id:
+                raise PMSError(f"No folio ID found for reservation {reservation_id}")
+
+            # Create payment authorization on folio using Finance API
+            payment_data = {
                 "amount": {
                     "amount": float(amount),
                     "currency": currency
                 },
-                "description": f"Authorization for reservation {reservation_id}"
+                "method": "CreditCard",
+                "description": f"Authorization for reservation {reservation_id}",
+                "paymentProcessedAtUtc": datetime.now(timezone.utc).isoformat()
             }
 
             result = await self._request(
                 "POST",
-                "/pay/v1/payments/authorize",
-                json=authorization_data
+                f"/finance/v1/folios/{folio_id}/payments/by-authorization",
+                json=payment_data
             )
 
             if hasattr(self.logger, "info"):
                 self.logger.info(
-                    "apaleo_payment_authorized",
+                    "apaleo_payment_authorized_finance_api",
                     reservation_id=reservation_id,
+                    folio_id=folio_id,
                     amount=amount,
                     currency=currency,
-                    transaction_id=result.get("transactionId")
+                    payment_id=result.get("id")
                 )
 
             return result
@@ -993,27 +1196,41 @@ class ApaleoConnector(BaseConnector):
                             reservation_id=reservation_id, error=str(e))
             raise PMSError(f"Failed to authorize payment: {e}")
 
-    async def capture_payment(self, transaction_id: str, amount: Optional[Decimal] = None) -> Dict[str, Any]:
-        """Capture previously authorized payment"""
+    async def capture_payment(self, reservation_id: str, amount: Decimal, currency: str = "EUR") -> Dict[str, Any]:
+        """Create payment capture on folio using Finance API"""
         try:
-            capture_data = {}
-            if amount is not None:
-                capture_data["amount"] = {
+            # Get folio for this reservation
+            folio = await self.get_folio_from_reservation(reservation_id)
+            folio_id = folio.get("id")
+
+            if not folio_id:
+                raise PMSError(f"No folio ID found for reservation {reservation_id}")
+
+            # Create payment on folio using Finance API
+            payment_data = {
+                "amount": {
                     "amount": float(amount),
-                    "currency": "EUR"  # Default currency
-                }
+                    "currency": currency
+                },
+                "method": "CreditCard",
+                "description": f"Payment capture for reservation {reservation_id}",
+                "paymentProcessedAtUtc": datetime.now(timezone.utc).isoformat()
+            }
 
             result = await self._request(
                 "POST",
-                f"/pay/v1/payments/{transaction_id}/capture",
-                json=capture_data
+                f"/finance/v1/folios/{folio_id}/payments",
+                json=payment_data
             )
 
             if hasattr(self.logger, "info"):
                 self.logger.info(
-                    "apaleo_payment_captured",
-                    transaction_id=transaction_id,
-                    captured_amount=amount
+                    "apaleo_payment_captured_finance_api",
+                    reservation_id=reservation_id,
+                    folio_id=folio_id,
+                    captured_amount=amount,
+                    currency=currency,
+                    payment_id=result.get("id")
                 )
 
             return result
@@ -1021,32 +1238,44 @@ class ApaleoConnector(BaseConnector):
         except Exception as e:
             if hasattr(self.logger, "error"):
                 self.logger.error("apaleo_payment_capture_error",
-                            transaction_id=transaction_id, error=str(e))
+                            reservation_id=reservation_id, error=str(e))
             raise PMSError(f"Failed to capture payment: {e}")
 
-    async def refund_payment(self, transaction_id: str, amount: Decimal, reason: str = "Guest request") -> Dict[str, Any]:
-        """Process refund for payment"""
+    async def refund_payment(self, reservation_id: str, amount: Decimal, reason: str = "Guest request", currency: str = "EUR") -> Dict[str, Any]:
+        """Process refund on folio using Finance API"""
         try:
+            # Get folio for this reservation
+            folio = await self.get_folio_from_reservation(reservation_id)
+            folio_id = folio.get("id")
+
+            if not folio_id:
+                raise PMSError(f"No folio ID found for reservation {reservation_id}")
+
+            # Create refund on folio using Finance API
             refund_data = {
                 "amount": {
                     "amount": float(amount),
-                    "currency": "EUR"
+                    "currency": currency
                 },
-                "reason": reason
+                "reason": reason,
+                "refundProcessedAtUtc": datetime.now(timezone.utc).isoformat()
             }
 
             result = await self._request(
                 "POST",
-                f"/pay/v1/payments/{transaction_id}/refund",
+                f"/finance/v1/folios/{folio_id}/refunds",
                 json=refund_data
             )
 
             if hasattr(self.logger, "info"):
                 self.logger.info(
-                    "apaleo_payment_refunded",
-                    transaction_id=transaction_id,
+                    "apaleo_payment_refunded_finance_api",
+                    reservation_id=reservation_id,
+                    folio_id=folio_id,
                     refund_amount=amount,
-                    reason=reason
+                    currency=currency,
+                    reason=reason,
+                    refund_id=result.get("id")
                 )
 
             return result
@@ -1054,44 +1283,74 @@ class ApaleoConnector(BaseConnector):
         except Exception as e:
             if hasattr(self.logger, "error"):
                 self.logger.error("apaleo_payment_refund_error",
-                            transaction_id=transaction_id, error=str(e))
+                            reservation_id=reservation_id, error=str(e))
             raise PMSError(f"Failed to process refund: {e}")
 
-    async def get_payment_status(self, transaction_id: str) -> Dict[str, Any]:
-        """Get payment transaction status"""
+    async def get_payment_status(self, reservation_id: str) -> Dict[str, Any]:
+        """Get payment status for reservation using Finance API"""
         try:
-            result = await self._request(
-                "GET",
-                f"/pay/v1/payments/{transaction_id}"
-            )
+            # Get folio for this reservation
+            folio = await self.get_folio_from_reservation(reservation_id)
 
-            return result
+            if hasattr(self.logger, "info"):
+                self.logger.info(
+                    "apaleo_payment_status_retrieved_finance_api",
+                    reservation_id=reservation_id,
+                    folio_id=folio.get("id"),
+                    balance=folio.get("balance", {})
+                )
+
+            return {
+                "folio_id": folio.get("id"),
+                "reservation_id": reservation_id,
+                "balance": folio.get("balance", {}),
+                "charges": folio.get("charges", []),
+                "payments": folio.get("payments", []),
+                "allowances": folio.get("allowances", []),
+                "status": folio.get("status", "open")
+            }
 
         except Exception as e:
             if hasattr(self.logger, "error"):
                 self.logger.error("apaleo_payment_status_error",
-                            transaction_id=transaction_id, error=str(e))
+                            reservation_id=reservation_id, error=str(e))
             raise PMSError(f"Failed to get payment status: {e}")
 
     async def list_payment_transactions(self, reservation_id: Optional[str] = None,
                                       property_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """List payment transactions with optional filters"""
+        """List payment transactions using Finance API"""
         try:
-            params = {}
+            property_filter = property_id or self.property_id
+
             if reservation_id:
-                params["reservationId"] = reservation_id
-            if property_id:
-                params["propertyId"] = property_id
-            elif self.property_id:
-                params["propertyId"] = self.property_id
+                # Get specific folio for this reservation
+                folio = await self.get_folio_from_reservation(reservation_id)
+                return folio.get("payments", [])
+            else:
+                # Get all folios for the property and extract payments
+                folios = await self._request(
+                    "GET",
+                    "/finance/v1/folios",
+                    params={"propertyIds": property_filter}
+                )
 
-            result = await self._request(
-                "GET",
-                "/pay/v1/payments",
-                params=params
-            )
+                all_payments = []
+                for folio in folios.get("folios", []):
+                    payments = folio.get("payments", [])
+                    # Add folio context to each payment
+                    for payment in payments:
+                        payment["folio_id"] = folio.get("id")
+                        payment["reservation_id"] = folio.get("reservationId")
+                    all_payments.extend(payments)
 
-            return result.get("payments", [])
+                if hasattr(self.logger, "info"):
+                    self.logger.info(
+                        "apaleo_payment_list_retrieved_finance_api",
+                        property_id=property_filter,
+                        total_payments=len(all_payments)
+                    )
+
+                return all_payments
 
         except Exception as e:
             if hasattr(self.logger, "error"):
@@ -1100,162 +1359,84 @@ class ApaleoConnector(BaseConnector):
 
     async def create_booking_with_payment(self, payload: ReservationDraft,
                                         payment_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create booking with payment processing (Apaleo Pay integration)"""
+        """Create booking and process payment using working Finance API"""
         try:
-            property_id = payload.hotel_id or self.property_id
-
-            # Enhanced booking data with payment account
-            booking_data = {
-                "paymentAccount": {
-                    "accountNumber": payment_data.get("card_number"),
-                    "accountHolder": f"{payload.guest.first_name} {payload.guest.last_name}",
-                    "expiryMonth": payment_data.get("expiry_month"),
-                    "expiryYear": payment_data.get("expiry_year"),
-                    "paymentMethod": payment_data.get("payment_method", "visa"),
-                    "payerEmail": payload.guest.email,
-                    "payerReference": payment_data.get("payer_reference"),
-                    "isVirtual": payment_data.get("is_virtual", False)
-                },
-                "booker": {
-                    "title": "Mr",  # Default or derive from guest data
-                    "firstName": payload.guest.first_name,
-                    "lastName": payload.guest.last_name,
-                    "email": payload.guest.email,
-                    "phone": payload.guest.phone,
-                    "address": {
-                        "addressLine1": "Unknown",  # Would need address in GuestProfile
-                        "postalCode": "00000",
-                        "city": "Unknown",
-                        "countryCode": payload.guest.nationality or "US"
-                    }
-                },
-                "comment": payload.special_requests,
-                "channelCode": "VoiceHive",
-                "source": "Voice Assistant",
-                "reservations": [
-                    {
-                        "propertyId": property_id,
-                        "arrival": payload.arrival.isoformat(),
-                        "departure": payload.departure.isoformat(),
-                        "adults": payload.guest_count,
-                        "primaryGuest": {
-                            "title": "Mr",
-                            "firstName": payload.guest.first_name,
-                            "lastName": payload.guest.last_name,
-                            "email": payload.guest.email,
-                            "phone": payload.guest.phone,
-                            "address": {
-                                "addressLine1": "Unknown",
-                                "postalCode": "00000",
-                                "city": "Unknown",
-                                "countryCode": payload.guest.nationality or "US"
-                            }
-                        },
-                        "timeSlices": [
-                            {
-                                "ratePlanId": payload.rate_code
-                            }
-                        ],
-                        "guaranteeType": payment_data.get("guarantee_type", "CreditCard"),
-                        "prePaymentAmount": {
-                            "amount": float(payment_data.get("prepayment_amount", 0)),
-                            "currency": "EUR"
-                        } if payment_data.get("prepayment_amount") else None
-                    }
-                ],
-                "transactionReference": payment_data.get("transaction_reference")
-            }
-
-            # Remove None values from prePaymentAmount
-            if booking_data["reservations"][0]["prePaymentAmount"] is None:
-                del booking_data["reservations"][0]["prePaymentAmount"]
-
-            # Create booking with payment via secure distribution endpoint
-            result = await self._request(
-                "POST",
-                "/distribution/v1/bookings",
-                json=booking_data
-            )
+            # Step 1: Create the reservation using the working booking endpoint
+            reservation = await self.create_reservation(payload)
+            reservation_id = reservation.id
 
             if hasattr(self.logger, "info"):
                 self.logger.info(
-                    "apaleo_booking_with_payment_created",
-                    booking_id=result.get("id"),
-                    transaction_reference=payment_data.get("transaction_reference"),
-                    property_id=property_id
+                    "booking_created_for_payment",
+                    reservation_id=reservation_id,
+                    confirmation_number=reservation.confirmation_number
                 )
 
-            return result
+            # Step 2: Process payment if required
+            payment_amount = payment_data.get("payment_amount")
+            if payment_amount:
+                try:
+                    payment_result = await self.capture_payment(
+                        reservation_id=reservation_id,
+                        amount=Decimal(str(payment_amount)),
+                        currency=payment_data.get("currency", "EUR")
+                    )
+
+                    if hasattr(self.logger, "info"):
+                        self.logger.info(
+                            "apaleo_booking_with_payment_completed_finance_api",
+                            reservation_id=reservation_id,
+                            payment_id=payment_result.get("id"),
+                            payment_amount=payment_amount
+                        )
+
+                    return {
+                        "reservation": {
+                            "id": reservation.id,
+                            "confirmation_number": reservation.confirmation_number,
+                            "status": reservation.status,
+                            "total_amount": float(reservation.total_amount)
+                        },
+                        "payment": payment_result,
+                        "status": "completed"
+                    }
+
+                except Exception as payment_error:
+                    # Log payment failure but don't cancel the reservation
+                    if hasattr(self.logger, "error"):
+                        self.logger.error(
+                            "payment_failed_reservation_created",
+                            reservation_id=reservation_id,
+                            error=str(payment_error)
+                        )
+
+                    return {
+                        "reservation": {
+                            "id": reservation.id,
+                            "confirmation_number": reservation.confirmation_number,
+                            "status": reservation.status,
+                            "total_amount": float(reservation.total_amount)
+                        },
+                        "payment_error": str(payment_error),
+                        "status": "reservation_created_payment_failed"
+                    }
+            else:
+                # No payment required
+                return {
+                    "reservation": {
+                        "id": reservation.id,
+                        "confirmation_number": reservation.confirmation_number,
+                        "status": reservation.status,
+                        "total_amount": float(reservation.total_amount)
+                    },
+                    "status": "reservation_created_no_payment"
+                }
 
         except Exception as e:
             if hasattr(self.logger, "error"):
                 self.logger.error("apaleo_booking_with_payment_error", error=str(e))
             raise PMSError(f"Failed to create booking with payment: {e}")
 
-    async def handle_payment_webhook(self, webhook_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle payment-related webhook events from Apaleo Pay"""
-        try:
-            event_type = webhook_data.get("type")
-            transaction_id = webhook_data.get("data", {}).get("transactionId")
-
-            if hasattr(self.logger, "info"):
-                self.logger.info(
-                    "apaleo_payment_webhook_received",
-                    event_type=event_type,
-                    transaction_id=transaction_id
-                )
-
-            # Process different payment events
-            if event_type == "authorized":
-                return await self._handle_payment_authorized(webhook_data)
-            elif event_type == "captured":
-                return await self._handle_payment_captured(webhook_data)
-            elif event_type == "failed":
-                return await self._handle_payment_failed(webhook_data)
-            elif event_type == "refunded":
-                return await self._handle_payment_refunded(webhook_data)
-            else:
-                if hasattr(self.logger, "warning"):
-                    self.logger.warning("unknown_payment_webhook_type", event_type=event_type)
-                return {"status": "ignored", "reason": f"Unknown event type: {event_type}"}
-
-        except Exception as e:
-            if hasattr(self.logger, "error"):
-                self.logger.error("apaleo_payment_webhook_error", error=str(e))
-            raise PMSError(f"Failed to handle payment webhook: {e}")
-
-    async def _handle_payment_authorized(self, webhook_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle payment authorization webhook"""
-        transaction_id = webhook_data.get("data", {}).get("transactionId")
-        if hasattr(self.logger, "info"):
-            self.logger.info("payment_authorized_webhook", transaction_id=transaction_id)
-
-        # TODO: Update local payment status, notify guest, etc.
-        return {"status": "processed", "event": "payment_authorized"}
-
-    async def _handle_payment_captured(self, webhook_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle payment capture webhook"""
-        transaction_id = webhook_data.get("data", {}).get("transactionId")
-        if hasattr(self.logger, "info"):
-            self.logger.info("payment_captured_webhook", transaction_id=transaction_id)
-
-        # TODO: Update local payment status, send confirmation, etc.
-        return {"status": "processed", "event": "payment_captured"}
-
-    async def _handle_payment_failed(self, webhook_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle payment failure webhook"""
-        transaction_id = webhook_data.get("data", {}).get("transactionId")
-        if hasattr(self.logger, "info"):
-            self.logger.info("payment_failed_webhook", transaction_id=transaction_id)
-
-        # TODO: Handle payment failure, notify guest, cancel reservation if needed
-        return {"status": "processed", "event": "payment_failed"}
-
-    async def _handle_payment_refunded(self, webhook_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle payment refund webhook"""
-        transaction_id = webhook_data.get("data", {}).get("transactionId")
-        if hasattr(self.logger, "info"):
-            self.logger.info("payment_refunded_webhook", transaction_id=transaction_id)
-
-        # TODO: Update local payment status, notify guest of refund
-        return {"status": "processed", "event": "payment_refunded"}
+    # NOTE: Apaleo Payment webhooks are not available via /pay/v1/ API (removed non-existent endpoints)
+    # Finance API webhooks would need to be implemented separately if required
+    # For now, payment status should be checked via get_payment_status() method

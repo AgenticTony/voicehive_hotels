@@ -13,6 +13,14 @@ from enum import Enum
 import aiohttp
 from logging_adapter import get_safe_logger
 
+# Import email notification capabilities
+try:
+    from .alerting.email_service import EmailNotificationChannel, EmailConfig, create_email_notification_channel
+    EMAIL_AVAILABLE = True
+except ImportError as e:
+    logger.warning("email_service_import_failed", error=str(e))
+    EMAIL_AVAILABLE = False
+
 logger = get_safe_logger("enhanced_alerting")
 
 
@@ -249,11 +257,13 @@ class SlackNotificationChannel(NotificationChannel):
 
 
 class PagerDutyNotificationChannel(NotificationChannel):
-    """PagerDuty notification channel"""
-    
+    """PagerDuty notification channel with health monitoring"""
+
     def __init__(self, integration_key: str):
         self.integration_key = integration_key
         self.api_url = "https://events.pagerduty.com/v2/enqueue"
+        self._last_health_check = None
+        self._health_status = "unknown"
     
     async def send_alert(self, alert: Alert) -> bool:
         """Send alert to PagerDuty"""
@@ -262,14 +272,24 @@ class PagerDutyNotificationChannel(NotificationChannel):
             if alert.severity not in [AlertSeverity.CRITICAL, AlertSeverity.HIGH]:
                 return True
             
+            # Map AlertSeverity to PagerDuty severity levels per official docs
+            severity_mapping = {
+                AlertSeverity.CRITICAL: "critical",
+                AlertSeverity.HIGH: "error",
+                AlertSeverity.MEDIUM: "warning",
+                AlertSeverity.LOW: "warning",
+                AlertSeverity.INFO: "info"
+            }
+
             payload = {
                 "routing_key": self.integration_key,
                 "event_action": "trigger",
                 "dedup_key": alert.id,
                 "payload": {
-                    "summary": alert.title,
-                    "source": "voicehive-hotels",
-                    "severity": alert.severity.value,
+                    "summary": alert.title[:1024],  # Max 1024 characters per official docs
+                    "source": "voicehive-hotels.orchestrator",  # More specific source as recommended
+                    "severity": severity_mapping.get(alert.severity, "error"),
+                    "timestamp": alert.started_at.isoformat(),  # Include timestamp per official docs
                     "component": "orchestrator",
                     "group": "voicehive",
                     "class": "alert",
@@ -278,9 +298,13 @@ class PagerDutyNotificationChannel(NotificationChannel):
                         "metric_value": alert.metric_value,
                         "threshold": alert.threshold,
                         "labels": alert.labels,
-                        "runbook_url": alert.runbook_url
+                        "runbook_url": alert.runbook_url,
+                        "rule_name": alert.rule_name,
+                        "escalation_policy": alert.escalation_policy
                     }
-                }
+                },
+                "client": "VoiceHive Hotels Orchestrator",  # Add client info per official docs
+                "client_url": "https://voicehive-hotels.eu"  # Add client URL per official docs
             }
             
             async with aiohttp.ClientSession() as session:
@@ -307,9 +331,10 @@ class PagerDutyNotificationChannel(NotificationChannel):
                 "event_action": "trigger",
                 "dedup_key": f"sla-violation-{sla_name}",
                 "payload": {
-                    "summary": f"SLA Violation: {sla_name}",
-                    "source": "voicehive-hotels",
-                    "severity": "critical",
+                    "summary": f"SLA Violation: {sla_name} - {current_value:.2f}% (Target: {target_value:.2f}%)"[:1024],
+                    "source": "voicehive-hotels.sla-monitor",  # More specific source
+                    "severity": "critical",  # SLA violations are always critical
+                    "timestamp": datetime.utcnow().isoformat(),  # Add timestamp per official docs
                     "component": "sla-monitor",
                     "group": "voicehive",
                     "class": "sla_violation",
@@ -317,9 +342,12 @@ class PagerDutyNotificationChannel(NotificationChannel):
                         "sla_name": sla_name,
                         "current_value": current_value,
                         "target_value": target_value,
+                        "violation_percentage": target_value - current_value,
                         "details": details
                     }
-                }
+                },
+                "client": "VoiceHive Hotels SLA Monitor",  # Add client info per official docs
+                "client_url": "https://voicehive-hotels.eu/monitoring/sla"  # Add client URL
             }
             
             async with aiohttp.ClientSession() as session:
@@ -336,6 +364,180 @@ class PagerDutyNotificationChannel(NotificationChannel):
         except Exception as e:
             logger.error("pagerduty_sla_notification_error", sla_name=sla_name, error=str(e))
             return False
+
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        Perform health check for PagerDuty service connectivity.
+
+        Returns:
+            Dict containing health status and details
+        """
+        try:
+            start_time = datetime.utcnow()
+
+            # Send a test event to verify connectivity and integration key validity
+            test_payload = {
+                "routing_key": self.integration_key,
+                "event_action": "trigger",
+                "dedup_key": f"health-check-{int(start_time.timestamp())}",
+                "payload": {
+                    "summary": "VoiceHive Health Check - Test Event",
+                    "source": "voicehive-hotels",
+                    "severity": "info",
+                    "component": "health-monitor",
+                    "group": "voicehive",
+                    "class": "health_check",
+                    "custom_details": {
+                        "description": "Automated health check from VoiceHive Hotels",
+                        "timestamp": start_time.isoformat(),
+                        "test": True
+                    }
+                }
+            }
+
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                async with session.post(self.api_url, json=test_payload) as response:
+                    response_time_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+
+                    if response.status == 202:
+                        self._health_status = "healthy"
+                        self._last_health_check = datetime.utcnow()
+
+                        health_data = {
+                            "status": "healthy",
+                            "service": "pagerduty",
+                            "integration_key_valid": True,
+                            "response_time_ms": response_time_ms,
+                            "api_url": self.api_url,
+                            "last_check": self._last_health_check.isoformat(),
+                            "test_event_sent": True
+                        }
+
+                        logger.info("pagerduty_health_check_passed",
+                                  response_time_ms=response_time_ms)
+                        return health_data
+                    else:
+                        self._health_status = "unhealthy"
+                        response_text = await response.text()
+
+                        health_data = {
+                            "status": "unhealthy",
+                            "service": "pagerduty",
+                            "integration_key_valid": False,
+                            "error": f"HTTP {response.status}: {response_text}",
+                            "response_time_ms": response_time_ms,
+                            "api_url": self.api_url,
+                            "last_check": datetime.utcnow().isoformat()
+                        }
+
+                        logger.error("pagerduty_health_check_failed",
+                                   status_code=response.status,
+                                   error=response_text)
+                        return health_data
+
+        except aiohttp.ClientError as e:
+            self._health_status = "unreachable"
+            health_data = {
+                "status": "unreachable",
+                "service": "pagerduty",
+                "error": f"Connection error: {str(e)}",
+                "api_url": self.api_url,
+                "last_check": datetime.utcnow().isoformat()
+            }
+
+            logger.error("pagerduty_health_check_connection_error", error=str(e))
+            return health_data
+
+        except Exception as e:
+            self._health_status = "error"
+            health_data = {
+                "status": "error",
+                "service": "pagerduty",
+                "error": f"Unexpected error: {str(e)}",
+                "api_url": self.api_url,
+                "last_check": datetime.utcnow().isoformat()
+            }
+
+            logger.error("pagerduty_health_check_unexpected_error", error=str(e))
+            return health_data
+
+    async def resolve_alert(self, alert_id: str) -> bool:
+        """
+        Resolve an alert in PagerDuty by sending a resolve event.
+
+        Args:
+            alert_id: The deduplication key of the alert to resolve
+
+        Returns:
+            bool: True if resolve event was sent successfully
+        """
+        try:
+            payload = {
+                "routing_key": self.integration_key,
+                "event_action": "resolve",
+                "dedup_key": alert_id
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.api_url, json=payload) as response:
+                    if response.status == 202:
+                        logger.info("pagerduty_alert_resolved", alert_id=alert_id)
+                        return True
+                    else:
+                        logger.error("pagerduty_alert_resolve_failed",
+                                   alert_id=alert_id,
+                                   status=response.status)
+                        return False
+
+        except Exception as e:
+            logger.error("pagerduty_resolve_error", alert_id=alert_id, error=str(e))
+            return False
+
+    async def acknowledge_alert(self, alert_id: str) -> bool:
+        """
+        Acknowledge an alert in PagerDuty by sending an acknowledge event.
+
+        Args:
+            alert_id: The deduplication key of the alert to acknowledge
+
+        Returns:
+            bool: True if acknowledge event was sent successfully
+        """
+        try:
+            payload = {
+                "routing_key": self.integration_key,
+                "event_action": "acknowledge",
+                "dedup_key": alert_id
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.api_url, json=payload) as response:
+                    if response.status == 202:
+                        logger.info("pagerduty_alert_acknowledged", alert_id=alert_id)
+                        return True
+                    else:
+                        logger.error("pagerduty_alert_acknowledge_failed",
+                                   alert_id=alert_id,
+                                   status=response.status)
+                        return False
+
+        except Exception as e:
+            logger.error("pagerduty_acknowledge_error", alert_id=alert_id, error=str(e))
+            return False
+
+    def get_health_status(self) -> Dict[str, Any]:
+        """
+        Get the current health status without performing a new check.
+
+        Returns:
+            Dict containing current health status
+        """
+        return {
+            "status": self._health_status,
+            "service": "pagerduty",
+            "last_check": self._last_health_check.isoformat() if self._last_health_check else None,
+            "api_url": self.api_url
+        }
 
 
 class EnhancedAlertingSystem:
@@ -706,3 +908,248 @@ def setup_default_sla_targets():
         labels={},
         alert_threshold=0.5  # Alert if below 99%
     ))
+
+
+# Email notification setup functions
+def setup_email_notifications(
+    smtp_host: str,
+    smtp_port: int,
+    username: str,
+    password: str,
+    from_email: str,
+    from_name: str = "VoiceHive Hotels Alerts",
+    critical_recipients: List[str] = None,
+    high_recipients: List[str] = None,
+    medium_recipients: List[str] = None,
+    low_recipients: List[str] = None,
+    info_recipients: List[str] = None,
+    sla_recipients: List[str] = None,
+    use_tls: bool = True,
+    start_tls: bool = True
+) -> bool:
+    """
+    Setup email notifications for the enhanced alerting system
+
+    Args:
+        smtp_host: SMTP server hostname
+        smtp_port: SMTP server port (587 for STARTTLS, 465 for TLS, 25 for plain)
+        username: SMTP username for authentication
+        password: SMTP password for authentication
+        from_email: Sender email address
+        from_name: Sender display name
+        critical_recipients: List of email addresses for critical alerts
+        high_recipients: List of email addresses for high priority alerts
+        medium_recipients: List of email addresses for medium priority alerts
+        low_recipients: List of email addresses for low priority alerts
+        info_recipients: List of email addresses for info alerts
+        sla_recipients: List of email addresses for SLA violations
+        use_tls: Use direct TLS connection (port 465)
+        start_tls: Upgrade to TLS using STARTTLS (port 587)
+
+    Returns:
+        bool: True if email notifications were configured successfully
+    """
+    if not EMAIL_AVAILABLE:
+        logger.error("email_notifications_unavailable",
+                    reason="Email service module not available")
+        return False
+
+    try:
+        # Create email notification channel
+        email_channel = create_email_notification_channel(
+            smtp_host=smtp_host,
+            smtp_port=smtp_port,
+            username=username,
+            password=password,
+            from_email=from_email,
+            from_name=from_name,
+            critical_recipients=critical_recipients or [],
+            high_recipients=high_recipients or [],
+            medium_recipients=medium_recipients or [],
+            low_recipients=low_recipients or [],
+            info_recipients=info_recipients or [],
+            sla_recipients=sla_recipients or [],
+            use_tls=use_tls,
+            start_tls=start_tls
+        )
+
+        # Add to the global alerting system
+        enhanced_alerting.add_notification_channel(email_channel)
+
+        logger.info("email_notifications_configured",
+                   smtp_host=smtp_host,
+                   smtp_port=smtp_port,
+                   from_email=from_email)
+        return True
+
+    except Exception as e:
+        logger.error("email_notifications_setup_failed", error=str(e))
+        return False
+
+
+def setup_gmail_notifications(
+    gmail_address: str,
+    gmail_app_password: str,
+    from_name: str = "VoiceHive Hotels Alerts",
+    critical_recipients: List[str] = None,
+    high_recipients: List[str] = None,
+    medium_recipients: List[str] = None,
+    low_recipients: List[str] = None,
+    info_recipients: List[str] = None,
+    sla_recipients: List[str] = None
+) -> bool:
+    """
+    Convenience function to setup Gmail SMTP notifications
+
+    Args:
+        gmail_address: Gmail address for sending (e.g., alerts@company.com)
+        gmail_app_password: Gmail app password (not regular password)
+        from_name: Sender display name
+        critical_recipients: List of email addresses for critical alerts
+        high_recipients: List of email addresses for high priority alerts
+        medium_recipients: List of email addresses for medium priority alerts
+        low_recipients: List of email addresses for low priority alerts
+        info_recipients: List of email addresses for info alerts
+        sla_recipients: List of email addresses for SLA violations
+
+    Returns:
+        bool: True if Gmail notifications were configured successfully
+    """
+    return setup_email_notifications(
+        smtp_host="smtp.gmail.com",
+        smtp_port=587,
+        username=gmail_address,
+        password=gmail_app_password,
+        from_email=gmail_address,
+        from_name=from_name,
+        critical_recipients=critical_recipients,
+        high_recipients=high_recipients,
+        medium_recipients=medium_recipients,
+        low_recipients=low_recipients,
+        info_recipients=info_recipients,
+        sla_recipients=sla_recipients,
+        use_tls=False,
+        start_tls=True
+    )
+
+
+def setup_office365_notifications(
+    office365_address: str,
+    office365_password: str,
+    from_name: str = "VoiceHive Hotels Alerts",
+    critical_recipients: List[str] = None,
+    high_recipients: List[str] = None,
+    medium_recipients: List[str] = None,
+    low_recipients: List[str] = None,
+    info_recipients: List[str] = None,
+    sla_recipients: List[str] = None
+) -> bool:
+    """
+    Convenience function to setup Office 365 SMTP notifications
+
+    Args:
+        office365_address: Office 365 email address for sending
+        office365_password: Office 365 password or app password
+        from_name: Sender display name
+        critical_recipients: List of email addresses for critical alerts
+        high_recipients: List of email addresses for high priority alerts
+        medium_recipients: List of email addresses for medium priority alerts
+        low_recipients: List of email addresses for low priority alerts
+        info_recipients: List of email addresses for info alerts
+        sla_recipients: List of email addresses for SLA violations
+
+    Returns:
+        bool: True if Office 365 notifications were configured successfully
+    """
+    return setup_email_notifications(
+        smtp_host="smtp.office365.com",
+        smtp_port=587,
+        username=office365_address,
+        password=office365_password,
+        from_email=office365_address,
+        from_name=from_name,
+        critical_recipients=critical_recipients,
+        high_recipients=high_recipients,
+        medium_recipients=medium_recipients,
+        low_recipients=low_recipients,
+        info_recipients=info_recipients,
+        sla_recipients=sla_recipients,
+        use_tls=False,
+        start_tls=True
+    )
+
+
+async def test_email_notifications() -> Dict[str, Any]:
+    """
+    Test email notification functionality
+
+    Returns:
+        Dict containing test results
+    """
+    if not EMAIL_AVAILABLE:
+        return {
+            "success": False,
+            "error": "Email service module not available"
+        }
+
+    results = {
+        "success": False,
+        "channels_tested": 0,
+        "channels_successful": 0,
+        "errors": []
+    }
+
+    try:
+        for channel in enhanced_alerting.notification_channels:
+            if hasattr(channel, 'health_check') and callable(channel.health_check):
+                results["channels_tested"] += 1
+
+                try:
+                    health_result = await channel.health_check()
+                    if health_result.get("status") == "healthy":
+                        results["channels_successful"] += 1
+                    else:
+                        results["errors"].append({
+                            "channel": type(channel).__name__,
+                            "error": health_result.get("error", "Unknown error")
+                        })
+
+                except Exception as e:
+                    results["errors"].append({
+                        "channel": type(channel).__name__,
+                        "error": str(e)
+                    })
+
+        results["success"] = results["channels_successful"] > 0
+
+        logger.info("email_notifications_test_completed",
+                   channels_tested=results["channels_tested"],
+                   channels_successful=results["channels_successful"])
+
+        return results
+
+    except Exception as e:
+        logger.error("email_notifications_test_failed", error=str(e))
+        results["errors"].append({"global": str(e)})
+        return results
+
+
+# Export email classes if available
+if EMAIL_AVAILABLE:
+    __all__ = [
+        'AlertSeverity', 'AlertStatus', 'AlertRule', 'Alert', 'SLATarget',
+        'NotificationChannel', 'SlackNotificationChannel', 'PagerDutyNotificationChannel',
+        'EmailNotificationChannel', 'EmailConfig',  # Email classes
+        'EnhancedAlertingSystem', 'enhanced_alerting',
+        'setup_default_alert_rules', 'setup_default_sla_targets',
+        'setup_email_notifications', 'setup_gmail_notifications',
+        'setup_office365_notifications', 'test_email_notifications',
+        'create_email_notification_channel'
+    ]
+else:
+    __all__ = [
+        'AlertSeverity', 'AlertStatus', 'AlertRule', 'Alert', 'SLATarget',
+        'NotificationChannel', 'SlackNotificationChannel', 'PagerDutyNotificationChannel',
+        'EnhancedAlertingSystem', 'enhanced_alerting',
+        'setup_default_alert_rules', 'setup_default_sla_targets'
+    ]

@@ -96,11 +96,16 @@ class ConnectionPoolConfig(BaseModel):
     db_command_timeout: float = Field(30.0, description="Database command timeout")
     db_server_settings: Dict[str, str] = Field(default_factory=dict)
     
-    # Redis pool config
-    redis_min_connections: int = Field(5, description="Minimum Redis connections")
-    redis_max_connections: int = Field(25, description="Maximum Redis connections")
+    # Redis pool config - optimized for production based on official Redis documentation
+    redis_min_connections: int = Field(10, description="Minimum Redis connections (warm pool)")
+    redis_max_connections: int = Field(100, description="Maximum Redis connections (production optimized)")
     redis_retry_on_timeout: bool = Field(True, description="Retry on Redis timeout")
     redis_health_check_interval: int = Field(30, description="Redis health check interval")
+
+    # Additional Redis production settings following official best practices
+    redis_socket_keepalive: bool = Field(True, description="Enable TCP keepalive for connection stability")
+    redis_socket_connect_timeout: float = Field(5.0, description="Connection establishment timeout")
+    redis_socket_timeout: float = Field(5.0, description="Socket operation timeout")
     
     # HTTP pool config
     http_max_keepalive: int = Field(20, description="Max HTTP keepalive connections")
@@ -293,12 +298,27 @@ class RedisPool:
             raise ImportError("aioredis is required for Redis connection pooling")
         
         try:
+            # Enhanced Redis connection pool configuration based on official documentation
+            # Following https://redis.io/docs/latest/develop/clients/redis-py/connect/#connect-with-a-connection-pool
             self.pool = aioredis.ConnectionPool.from_url(
                 redis_url,
+                # Core pool settings from official Redis documentation
                 max_connections=self.config.redis_max_connections,
                 retry_on_timeout=self.config.redis_retry_on_timeout,
                 health_check_interval=self.config.redis_health_check_interval,
-                decode_responses=False
+                decode_responses=False,
+
+                # Production optimizations based on official Redis best practices
+                socket_keepalive=self.config.redis_socket_keepalive,          # Enable TCP keepalive for connection stability
+                socket_keepalive_options={},                                  # Use system defaults for keepalive options
+                socket_connect_timeout=self.config.redis_socket_connect_timeout,  # Connection establishment timeout
+                socket_timeout=self.config.redis_socket_timeout,             # Socket operation timeout
+
+                # Connection lifecycle management
+                retry_on_error=[ConnectionError, TimeoutError],  # Retry on connection issues
+
+                # Performance optimizations
+                connection_class=aioredis.Connection,  # Use efficient async connection class
             )
             
             self.redis = aioredis.Redis(connection_pool=self.pool)

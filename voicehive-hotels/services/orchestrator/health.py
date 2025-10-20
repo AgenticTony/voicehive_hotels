@@ -370,15 +370,38 @@ class HealthChecker:
                         dependencies[service_name] = {"status": "healthy"}
                     
                     elif config["check_method"] == "database":
-                        # Check database connectivity if configured
-                        if config["url"]:
-                            import asyncpg
-                            conn = await asyncpg.connect(config["url"])
-                            await conn.execute("SELECT 1")
-                            await conn.close()
-                            dependencies[service_name] = {"status": "healthy"}
-                        else:
-                            dependencies[service_name] = {"status": "not_configured"}
+                        # Check database connectivity using our enhanced database manager
+                        try:
+                            from database.connection import get_database_health
+                            db_health = await get_database_health()
+
+                            if db_health["status"] == "healthy":
+                                dependencies[service_name] = {
+                                    "status": "healthy",
+                                    "circuit_breaker_enabled": db_health.get("circuit_breaker_enabled", False),
+                                    "pool_stats": db_health.get("pool_stats", {}),
+                                    "circuit_breakers": db_health.get("circuit_breakers", {})
+                                }
+                            elif db_health["status"] == "degraded":
+                                dependencies[service_name] = {
+                                    "status": "degraded",
+                                    "circuit_breaker_enabled": db_health.get("circuit_breaker_enabled", False),
+                                    "circuit_breakers": db_health.get("circuit_breakers", {}),
+                                    "error": db_health.get("error", "Unknown degradation")
+                                }
+                                overall_healthy = False
+                            else:
+                                dependencies[service_name] = {
+                                    "status": "unhealthy",
+                                    "error": db_health.get("error", "Database health check failed")
+                                }
+                                overall_healthy = False
+                        except Exception as db_e:
+                            dependencies[service_name] = {
+                                "status": "unhealthy",
+                                "error": f"Database health check error: {str(db_e)}"
+                            }
+                            overall_healthy = False
                     
                     elif config["check_method"] == "livekit":
                         # Check LiveKit connectivity
@@ -561,7 +584,7 @@ async def connectors_health() -> Dict[str, Any]:
 async def dependencies_health() -> Dict[str, Any]:
     """Check all service dependencies"""
     dependencies_status = await health_checker.check_service_dependencies()
-    
+
     if dependencies_status.status == HealthStatus.UNHEALTHY:
         raise HTTPException(
             status_code=503,
@@ -571,8 +594,72 @@ async def dependencies_health() -> Dict[str, Any]:
                 "details": dependencies_status.details
             }
         )
-    
+
     return dependencies_status.to_dict()
+
+
+@router.get("/database", summary="Database health with circuit breaker info")
+async def database_health() -> Dict[str, Any]:
+    """Check database health including circuit breaker statistics"""
+    try:
+        from database.connection import get_database_health
+        db_health = await get_database_health()
+
+        if db_health["status"] == "unhealthy":
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "unhealthy",
+                    "component": "database",
+                    "details": db_health
+                }
+            )
+
+        return db_health
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "error",
+                "component": "database",
+                "error": str(e)
+            }
+        )
+
+
+@router.get("/database/circuit-breakers", summary="Database circuit breaker statistics")
+async def database_circuit_breaker_stats() -> Dict[str, Any]:
+    """Get detailed database circuit breaker statistics"""
+    try:
+        from database.connection import db_manager
+
+        if not db_manager.engine:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "error",
+                    "message": "Database not initialized"
+                }
+            )
+
+        circuit_breaker_stats = await db_manager.get_circuit_breaker_stats()
+
+        return {
+            "status": "success",
+            "circuit_breakers": circuit_breaker_stats,
+            "circuit_breaker_enabled": len(circuit_breaker_stats) > 0,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "error",
+                "error": str(e)
+            }
+        )
 
 
 # Note: Prometheus metrics are exposed at the root /metrics endpoint in app.py

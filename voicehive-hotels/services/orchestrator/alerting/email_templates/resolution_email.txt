@@ -1,0 +1,81 @@
+✅ RESOLVED: {{ alert.title }}
+================================================================================
+
+🎉 ALERT SUCCESSFULLY RESOLVED! 🎉
+
+The alert condition has returned to normal levels.
+{% if duration %}Total Duration: {{ duration }}{% endif %}
+
+ORIGINAL ALERT DETAILS:
+-----------------------
+Severity: {{ alert.severity.value|upper }}
+Description: {{ alert.description }}
+
+FINAL METRICS:
+--------------
+Final Value: {{ "%.2f"|format(alert.metric_value) }}
+Threshold:   {{ "%.2f"|format(alert.threshold) }}
+Rule Name:   {{ alert.rule_name }}
+
+TIMELINE:
+---------
+🚨 Alert Triggered: {{ formatted_started_at }}
+   Original Severity: {{ alert.severity.value|title }}
+
+{% if formatted_resolved_at %}✅ Alert Resolved:  {{ formatted_resolved_at }}
+   System returned to normal operations
+{% endif %}
+{% if duration %}
+⏱️  Total Duration:  {{ duration }}
+{% endif %}
+
+DETAILS:
+--------
+Alert ID: {{ alert.id }}
+{% if alert.labels %}
+Labels:
+{% for key, value in alert.labels.items() %}  - {{ key }}={{ value }}
+{% endfor %}
+{% endif %}
+
+ACTIONS:
+--------
+{% if runbook_available %}📚 Runbook: {{ alert.runbook_url }}
+{% endif %}📊 Dashboard: {{ dashboard_url }}
+📋 Alert History: {{ dashboard_url }}/alerts/{{ alert.id }}
+
+POST-RESOLUTION REVIEW:
+-----------------------
+💡 Consider reviewing this incident to identify:
+
+1. Root cause of the issue
+2. Response time and effectiveness
+3. Potential preventive measures
+4. Alert threshold optimization opportunities
+
+FOLLOW-UP CHECKLIST:
+-------------------
+□ Document incident findings
+□ Update runbooks if needed
+□ Review alert thresholds
+□ Share learnings with team
+□ Update monitoring if required
+
+TECHNICAL SUMMARY:
+-----------------
+Alert rule: {{ alert.rule_name }}
+Resolution: Metric returned below threshold
+Final metric value: {{ alert.metric_value }} (threshold: {{ alert.threshold }})
+Auto-resolved by: {{ company_name }} Monitoring System
+
+================================================================================
+{{ company_name }} - Monitoring and Alerting System
+
+This resolution notification was generated automatically when the alert
+condition cleared. No further action is required unless specified in your
+incident response procedures.
+
+For support: monitoring-support@voicehive-hotels.eu
+Documentation: https://docs.voicehive-hotels.eu/monitoring
+Dashboard: {{ dashboard_url }}
+================================================================================

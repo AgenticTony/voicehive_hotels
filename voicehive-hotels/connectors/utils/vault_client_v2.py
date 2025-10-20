@@ -86,11 +86,33 @@ class EnhancedVaultClient:
         self._cache: Dict[str, Any] = {}
         self._renewal_task: Optional[asyncio.Task] = None
 
-        # Initialize async client
+        # Initialize async client with optimized connection pooling for internal services
+        # Vault operations are typically frequent but low-volume
+        vault_connection_limits = httpx.Limits(
+            max_keepalive_connections=5,   # Conservative limit for internal services
+            max_connections=15,            # Modest limit for secret operations
+            keepalive_expiry=60.0          # Longer keepalive for internal services
+        )
+
+        # Configure timeout for secret management operations
+        vault_timeout_config = httpx.Timeout(
+            connect=10.0,    # Internal service connection timeout
+            read=30.0,       # Read timeout for secret operations
+            write=10.0,      # Write timeout for secret writes
+            pool=3.0         # Quick pool acquisition for internal services
+        )
+
         self._client = httpx.AsyncClient(
             base_url=self.vault_addr,
-            timeout=30.0,
-            headers={"X-Vault-Namespace": self.namespace},
+            timeout=vault_timeout_config,
+            limits=vault_connection_limits,
+            headers={
+                "X-Vault-Namespace": self.namespace,
+                "Connection": "keep-alive",  # Enable connection reuse
+                "User-Agent": "VoiceHive-Vault-Client/2.0"
+            },
+            # Enable HTTP/2 for internal services if supported
+            http2=True,
         )
 
     async def __aenter__(self):
