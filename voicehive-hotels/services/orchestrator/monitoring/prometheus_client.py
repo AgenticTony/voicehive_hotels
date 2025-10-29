@@ -491,6 +491,80 @@ class PrometheusClient:
                 "timestamp": datetime.utcnow().isoformat()
             }
 
+    async def get_endpoint_metrics(self, time_range: str = "1h") -> List[Dict[str, Any]]:
+        """
+        Get endpoint-specific performance metrics from Prometheus
+
+        Args:
+            time_range: Time range for metrics (1h, 6h, 24h)
+
+        Returns:
+            List of endpoint metrics with RPS and P95 response times
+        """
+        try:
+            # Map of endpoints to track
+            endpoints = [
+                "/call/webhook",
+                "/pms/booking",
+                "/auth/validate",
+                "/monitoring/health",
+                "/auth/guest/login",
+                "/tts/synthesize",
+                "/asr/transcribe"
+            ]
+
+            endpoint_metrics = []
+
+            for endpoint in endpoints:
+                try:
+                    # Query request rate (RPS) for this endpoint
+                    rps_query = f'rate(voicehive_requests_total{{handler="{endpoint}"}}[{time_range}])'
+                    rps_results = await self.query_instant(rps_query)
+                    rps = round(sum(r.value for r in rps_results), 2) if rps_results else 0.0
+
+                    # Query P95 response time for this endpoint
+                    p95_query = f'histogram_quantile(0.95, rate(voicehive_request_duration_seconds_bucket{{handler="{endpoint}"}}[{time_range}]))'
+                    p95_results = await self.query_instant(p95_query)
+                    p95_seconds = sum(r.value for r in p95_results) if p95_results else 0.0
+                    p95_ms = round(p95_seconds * 1000)  # Convert to milliseconds
+
+                    # Query error rate for this endpoint
+                    error_query = f'rate(voicehive_errors_total{{handler="{endpoint}"}}[{time_range}])'
+                    error_results = await self.query_instant(error_query)
+                    error_rate = sum(r.value for r in error_results) if error_results else 0.0
+
+                    endpoint_metrics.append({
+                        "endpoint": endpoint,
+                        "rps": rps,
+                        "p95_ms": p95_ms,
+                        "error_rate": round(error_rate, 4),
+                        "status": "healthy" if error_rate < 0.01 else "degraded" if error_rate < 0.05 else "unhealthy"
+                    })
+
+                except Exception as e:
+                    self.logger.warning(f"Failed to get metrics for endpoint {endpoint}", error=str(e))
+                    endpoint_metrics.append({
+                        "endpoint": endpoint,
+                        "rps": 0.0,
+                        "p95_ms": 0,
+                        "error_rate": 0.0,
+                        "status": "unknown"
+                    })
+
+            # Sort by RPS (most active first)
+            endpoint_metrics.sort(key=lambda x: x["rps"], reverse=True)
+
+            return endpoint_metrics
+
+        except Exception as e:
+            self.logger.error("Failed to get endpoint metrics", error=str(e))
+            # Return fallback data
+            return [
+                {"endpoint": "/call/webhook", "rps": 0.0, "p95_ms": 0, "error_rate": 0.0, "status": "unknown"},
+                {"endpoint": "/pms/booking", "rps": 0.0, "p95_ms": 0, "error_rate": 0.0, "status": "unknown"},
+                {"endpoint": "/auth/validate", "rps": 0.0, "p95_ms": 0, "error_rate": 0.0, "status": "unknown"}
+            ]
+
     async def _get_peak_value(self, metric_name: str, time_range: str, hotel_id: Optional[str] = None) -> float:
         """Get peak value for a metric over time range"""
         try:

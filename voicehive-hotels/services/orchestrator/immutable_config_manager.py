@@ -18,6 +18,7 @@ from prometheus_client import Counter, Gauge, Histogram
 from logging_adapter import get_safe_logger
 from audit_logging import AuditLogger
 from config import VoiceHiveConfig, EnvironmentType
+from security.path_validator import voicehive_path_validator, PathValidationError
 
 logger = get_safe_logger("orchestrator.immutable_config")
 audit_logger = AuditLogger("immutable_config")
@@ -182,7 +183,7 @@ class ImmutableConfigurationManager:
         
         for env_file in metadata_dir.glob("*_active.json"):
             try:
-                with open(env_file, 'r') as f:
+                with voicehive_path_validator.open_safe_file(env_file, 'r') as f:
                     data = json.load(f)
                 
                 version = ConfigurationVersion.from_dict(data)
@@ -193,7 +194,13 @@ class ImmutableConfigurationManager:
                     environment=version.environment,
                     version_id=version.version_id
                 )
-                
+
+            except PathValidationError as e:
+                logger.error(
+                    "path_validation_failed_for_active_version",
+                    env_file=str(env_file),
+                    error=str(e)
+                )
             except Exception as e:
                 logger.error(
                     "failed_to_load_active_version",
@@ -332,12 +339,13 @@ class ImmutableConfigurationManager:
         """Get a specific configuration version by ID"""
         
         version_file = self.storage_path / "versions" / f"{version_id}.json"
-        
-        if not version_file.exists():
+
+        # Use secure file existence check
+        if not voicehive_path_validator.validate_file_exists_safe(version_file):
             return None
-        
+
         try:
-            with open(version_file, 'r') as f:
+            with voicehive_path_validator.open_safe_file(version_file, 'r') as f:
                 data = json.load(f)
             
             version = ConfigurationVersion.from_dict(data)
@@ -352,7 +360,14 @@ class ImmutableConfigurationManager:
                 await self._save_version(version)
             
             return version
-            
+
+        except PathValidationError as e:
+            logger.error(
+                "path_validation_failed_for_configuration_version",
+                version_id=version_id,
+                error=str(e)
+            )
+            return None
         except Exception as e:
             logger.error(
                 "failed_to_load_configuration_version",
@@ -559,9 +574,16 @@ class ImmutableConfigurationManager:
         version_file = self.storage_path / "versions" / f"{version.version_id}.json"
         
         try:
-            with open(version_file, 'w') as f:
+            with voicehive_path_validator.open_safe_file(version_file, 'w') as f:
                 f.write(json.dumps(version.to_dict(), indent=2))
-                
+
+        except PathValidationError as e:
+            logger.error(
+                "path_validation_failed_save_configuration_version",
+                version_id=version.version_id,
+                error=str(e)
+            )
+            raise
         except Exception as e:
             logger.error(
                 "failed_to_save_configuration_version",
@@ -576,9 +598,16 @@ class ImmutableConfigurationManager:
         metadata_file = self.storage_path / "metadata" / f"{version.environment}_active.json"
         
         try:
-            with open(metadata_file, 'w') as f:
+            with voicehive_path_validator.open_safe_file(metadata_file, 'w') as f:
                 f.write(json.dumps(version.to_dict(), indent=2))
-                
+
+        except PathValidationError as e:
+            logger.error(
+                "path_validation_failed_save_active_metadata",
+                environment=version.environment,
+                error=str(e)
+            )
+            raise
         except Exception as e:
             logger.error(
                 "failed_to_save_active_version_metadata",
@@ -593,9 +622,16 @@ class ImmutableConfigurationManager:
         rollback_file = self.storage_path / "rollbacks" / f"{rollback.rollback_id}.json"
         
         try:
-            with open(rollback_file, 'w') as f:
+            with voicehive_path_validator.open_safe_file(rollback_file, 'w') as f:
                 f.write(json.dumps(rollback.to_dict(), indent=2))
-                
+
+        except PathValidationError as e:
+            logger.error(
+                "path_validation_failed_save_rollback",
+                rollback_id=rollback.rollback_id,
+                error=str(e)
+            )
+            raise
         except Exception as e:
             logger.error(
                 "failed_to_save_rollback_record",

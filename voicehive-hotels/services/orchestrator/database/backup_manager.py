@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from prometheus_client import Gauge, Counter, Histogram, Summary
 from logging_adapter import get_safe_logger
 from audit_logging import AuditLogger
+from security.path_validator import voicehive_path_validator, PathValidationError
 
 logger = get_safe_logger("orchestrator.db_backup")
 audit_logger = AuditLogger("database_backup")
@@ -246,14 +247,18 @@ class BackupVerifier:
                 if abs(file_size - backup_metadata.compressed_size_bytes) > 1024:  # 1KB tolerance
                     result["errors"].append(f"File size mismatch: expected {backup_metadata.compressed_size_bytes}, got {file_size}")
             
-            # Check file is readable
+            # Check file is readable using secure path validation
             try:
-                with open(backup_path, 'rb') as f:
+                with voicehive_path_validator.open_safe_file(backup_path, 'rb') as f:
                     # Read first and last 1KB to ensure file is not corrupted
                     f.read(1024)
                     f.seek(-1024, 2)
                     f.read(1024)
                 result["details"]["readable"] = True
+            except PathValidationError as e:
+                result["passed"] = False
+                result["errors"].append(f"Path validation failed: {str(e)}")
+                logger.error("Backup path validation failed", backup_path=backup_path, error=str(e))
             except Exception as e:
                 result["passed"] = False
                 result["errors"].append(f"File not readable: {str(e)}")
@@ -398,31 +403,48 @@ class BackupVerifier:
     async def _test_decompression(self, file_path: Path, compression: CompressionType):
         """Test if compressed file can be decompressed"""
         if compression == CompressionType.GZIP:
-            with gzip.open(file_path, 'rb') as f:
-                # Read first 1KB to test decompression
-                f.read(1024)
+            # Validate path before decompression
+            try:
+                safe_path = voicehive_path_validator.get_safe_path(file_path)
+                with gzip.open(safe_path, 'rb') as f:
+                    # Read first 1KB to test decompression
+                    f.read(1024)
+            except PathValidationError as e:
+                logger.error("Decompression path validation failed", file_path=str(file_path), error=str(e))
+                raise
         # Add other compression types as needed
     
     async def _calculate_file_checksum(self, file_path: Path) -> str:
-        """Calculate SHA256 checksum of file"""
+        """Calculate SHA256 checksum of file using secure path validation"""
         sha256_hash = hashlib.sha256()
-        
-        with open(file_path, "rb") as f:
-            # Read file in chunks to handle large files
-            for chunk in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(chunk)
-        
+
+        try:
+            with voicehive_path_validator.open_safe_file(file_path, "rb") as f:
+                # Read file in chunks to handle large files
+                for chunk in iter(lambda: f.read(4096), b""):
+                    sha256_hash.update(chunk)
+        except PathValidationError as e:
+            logger.error("Checksum calculation path validation failed", file_path=str(file_path), error=str(e))
+            raise
+
         return sha256_hash.hexdigest()
     
     async def _read_backup_content(self, file_path: Path, compression: CompressionType) -> str:
-        """Read backup file content"""
-        if compression == CompressionType.GZIP:
-            with gzip.open(file_path, 'rt') as f:
-                # Read first 10MB to check content
-                return f.read(10 * 1024 * 1024)
-        else:
-            with open(file_path, 'r') as f:
-                return f.read(10 * 1024 * 1024)
+        """Read backup file content using secure path validation"""
+        try:
+            if compression == CompressionType.GZIP:
+                # Validate path and use gzip
+                safe_path = voicehive_path_validator.get_safe_path(file_path)
+                with gzip.open(safe_path, 'rt') as f:
+                    # Read first 10MB to check content
+                    return f.read(10 * 1024 * 1024)
+            else:
+                # Use secure file opening for uncompressed files
+                with voicehive_path_validator.open_safe_file(file_path, 'r') as f:
+                    return f.read(10 * 1024 * 1024)
+        except PathValidationError as e:
+            logger.error("Backup content read path validation failed", file_path=str(file_path), error=str(e))
+            raise
     
     async def _create_test_database(self, db_name: str):
         """Create test database for restore testing"""
@@ -848,9 +870,13 @@ class DatabaseBackupManager:
         """Write backup to configured storage"""
         
         if self.config.storage_type == StorageType.LOCAL:
-            # Write to local file
-            with open(output_file, 'wb') as f:
-                f.write(backup_content)
+            # Write to local file using secure path validation
+            try:
+                with voicehive_path_validator.open_safe_file(output_file, 'wb') as f:
+                    f.write(backup_content)
+            except PathValidationError as e:
+                logger.error("Backup write path validation failed", output_file=str(output_file), error=str(e))
+                raise
         
         elif self.config.storage_type == StorageType.S3:
             # Upload to S3
@@ -872,18 +898,31 @@ class DatabaseBackupManager:
         # Add other storage types as needed
     
     async def _calculate_directory_checksum(self, directory: Path) -> str:
-        """Calculate checksum of entire directory"""
+        """Calculate checksum of entire directory using secure path validation"""
         sha256_hash = hashlib.sha256()
-        
-        # Sort files for consistent checksum
-        files = sorted(directory.rglob('*'))
-        
-        for file_path in files:
-            if file_path.is_file():
-                with open(file_path, 'rb') as f:
-                    for chunk in iter(lambda: f.read(4096), b""):
-                        sha256_hash.update(chunk)
-        
+
+        try:
+            # Validate the directory path first
+            safe_directory = voicehive_path_validator.get_safe_path(directory)
+
+            # Sort files for consistent checksum
+            files = sorted(safe_directory.rglob('*'))
+
+            for file_path in files:
+                if file_path.is_file():
+                    try:
+                        with voicehive_path_validator.open_safe_file(file_path, 'rb') as f:
+                            for chunk in iter(lambda: f.read(4096), b""):
+                                sha256_hash.update(chunk)
+                    except PathValidationError as e:
+                        logger.warning("Skipping file due to path validation failure",
+                                     file_path=str(file_path), error=str(e))
+                        continue
+
+        except PathValidationError as e:
+            logger.error("Directory checksum path validation failed", directory=str(directory), error=str(e))
+            raise
+
         return sha256_hash.hexdigest()
     
     async def _save_backup_metadata(self, backup_metadata: BackupMetadata):

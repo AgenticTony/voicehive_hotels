@@ -473,17 +473,15 @@ async def get_performance_summary(
         # Get real performance metrics from Prometheus
         real_metrics = await prometheus_client.get_performance_metrics(time_range=time_range)
 
+        # Get real endpoint metrics from Prometheus
+        endpoint_metrics = await prometheus_client.get_endpoint_metrics(time_range=time_range)
+
         performance_summary = {
             "timestamp": datetime.utcnow().isoformat(),
             "time_range": time_range,
             "summary": real_metrics,
             "data_source": "prometheus",
-            "top_endpoints": [
-                # TODO: Implement real endpoint metrics from Prometheus
-                {"endpoint": "/call/webhook", "rps": 0.0, "p95_ms": 0, "note": "Real endpoint metrics coming soon"},
-                {"endpoint": "/pms/booking", "rps": 0.0, "p95_ms": 0, "note": "Real endpoint metrics coming soon"},
-                {"endpoint": "/auth/validate", "rps": 0.0, "p95_ms": 0, "note": "Real endpoint metrics coming soon"}
-            ]
+            "top_endpoints": endpoint_metrics[:10]  # Top 10 most active endpoints
         }
 
         logger.info("performance_summary_requested",

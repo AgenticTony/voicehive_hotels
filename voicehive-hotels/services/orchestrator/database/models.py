@@ -91,7 +91,7 @@ class User(Base):
         CheckConstraint('email_verified IN (true, false)', name='check_email_verified_boolean'),
         CheckConstraint('active IN (true, false)', name='check_active_boolean'),
         CheckConstraint(
-            'email ~ \'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$\'',
+            r'email ~ \'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$\'',
             name='check_email_format'
         ),
     )

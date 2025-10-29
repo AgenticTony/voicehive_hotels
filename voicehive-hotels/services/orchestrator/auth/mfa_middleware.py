@@ -3,6 +3,7 @@ Multi-Factor Authentication (MFA) Middleware and Dependencies
 Handles MFA verification requirements for protected endpoints
 """
 
+import os
 from datetime import datetime, timezone
 from typing import Optional, List, Callable
 from fastapi import Request, HTTPException, Depends, status
@@ -60,9 +61,13 @@ async def get_mfa_service(
     Returns:
         MFAService instance
     """
-    # TODO: Get encryption key from secure configuration
-    # This should be loaded from environment or vault
-    encryption_key = "your-base64-encoded-fernet-key-here"  # Replace with actual key
+    # Get encryption key from secure configuration
+    encryption_key = os.getenv("MFA_ENCRYPTION_KEY")
+    if not encryption_key:
+        raise ValueError(
+            "MFA_ENCRYPTION_KEY environment variable is required. "
+            "Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
+        )
 
     try:
         return MFAService(db_session, encryption_key)

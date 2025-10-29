@@ -340,8 +340,25 @@ class IntentDetectionService:
         # Always available: keyword-based detector
         self.detectors["keyword"] = KeywordBasedDetector(self.config.get("keyword_config", {}))
 
-        # TODO: Add spaCy detector when spacy is available
-        # TODO: Add Azure OpenAI detector when configured
+        # Conditionally add spaCy detector if spaCy is available
+        try:
+            import spacy
+            spacy_model = self.config.get("spacy_model", "en_core_web_sm")
+            if spacy.util.is_package(spacy_model):
+                # SpacyDetector would be implemented when needed
+                logger.info(f"spaCy model {spacy_model} available, but SpacyDetector not yet implemented")
+            else:
+                logger.debug(f"spaCy model {spacy_model} not available, skipping spaCy detector")
+        except ImportError:
+            logger.debug("spaCy not installed, skipping spaCy detector")
+
+        # Conditionally add Azure OpenAI detector if configured
+        azure_openai_config = self.config.get("azure_openai_config", {})
+        if azure_openai_config.get("endpoint") and azure_openai_config.get("api_key"):
+            # AzureOpenAIDetector would be implemented when needed
+            logger.info("Azure OpenAI configured, but AzureOpenAIDetector not yet implemented")
+        else:
+            logger.debug("Azure OpenAI not configured, skipping Azure OpenAI detector")
 
         logger.info(f"Initialized intent detectors: {list(self.detectors.keys())}")
 

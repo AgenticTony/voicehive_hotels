@@ -21,6 +21,7 @@ from enum import Enum
 
 from production_vault_client import ProductionVaultClient
 from logging_adapter import get_safe_logger
+from enhanced_alerting import enhanced_alerting, Alert, AlertSeverity
 
 logger = get_safe_logger("orchestrator.vault_rotation")
 
@@ -370,12 +371,22 @@ class VaultSecretRotationManager:
                       days_until_rotation=days_until_rotation,
                       message=warning_message)
 
-        # TODO: Integrate with actual notification system
-        # await notification_service.send_alert(
-        #     channels=schedule.notification_channels,
-        #     message=warning_message,
-        #     severity="warning"
-        # )
+        # Send alert through enhanced alerting system
+        alert = Alert(
+            title=f"Secret Rotation Warning: {rotation_type.value}",
+            description=warning_message,
+            severity=AlertSeverity.MEDIUM,
+            metric_name="vault_secret_rotation_warning",
+            metric_value=days_until_rotation,
+            threshold=schedule.warning_days,
+            labels={
+                "rotation_type": rotation_type.value,
+                "auto_rotate": str(schedule.auto_rotate),
+                "days_until": str(days_until_rotation)
+            }
+        )
+
+        await enhanced_alerting.send_alert(alert)
 
     async def perform_scheduled_rotations(self) -> Dict[str, List[RotationResult]]:
         """Perform all scheduled rotations"""

@@ -1,78 +1,271 @@
 {
-  "concurrent_users": 20,
-  "requests_per_user": 50,
-  "test_duration": 120,
-  "memory_threshold_mb": 1000,
-  "max_response_time": 3.0,
-  "max_error_rate": 0.05,
-  "base_url": "http://localhost:8000",
-  
-  "test_categories": [
-    "Concurrent Call Simulation",
-    "PMS Connector Load Testing", 
-    "Authentication System Load Testing",
-    "Memory Performance Testing",
-    "Database and Redis Performance",
-    "Network Failure Simulation"
-  ],
-  
-  "performance_thresholds": {
-    "api_response_time_ms": 2000,
-    "database_query_time_ms": 500,
-    "redis_operation_time_ms": 10,
-    "memory_leak_threshold_mb": 100,
-    "cpu_usage_threshold_percent": 80,
-    "error_rate_threshold": 0.05
-  },
-  
-  "load_patterns": {
-    "ramp_up_duration": 30,
-    "steady_state_duration": 60,
-    "ramp_down_duration": 30
-  },
-  
-  "service_endpoints": {
-    "health_check": "/healthz",
-    "authentication": "/auth/login",
-    "call_management": "/api/v1/calls",
-    "pms_connector": "/api/v1/pms",
-    "tts_service": "/api/v1/tts",
-    "audio_processing": "/api/v1/audio"
-  },
-  
-  "database_config": {
-    "connection_pool_sizes": [5, 10, 20, 50],
-    "query_types": ["simple", "complex", "aggregation"],
-    "concurrent_connections": [10, 25, 50, 100]
-  },
-  
-  "redis_config": {
-    "operation_types": ["string", "hash", "list", "set", "sorted_set"],
-    "data_sizes": [100, 1024, 10240, 102400],
-    "concurrent_clients": [10, 25, 50, 100]
-  },
-  
-  "network_simulation": {
-    "latency_scenarios": [
-      {"name": "normal", "latency_ms": 10, "jitter_ms": 2},
-      {"name": "slow", "latency_ms": 200, "jitter_ms": 50},
-      {"name": "very_slow", "latency_ms": 500, "jitter_ms": 100}
+  "sprint_0_load_tests": {
+    "description": "Sprint 0 Load Testing Configuration - Enhanced",
+    "version": "2.0.0",
+    "base_url": "http://localhost:8000",
+
+    "sprint_0_scenarios": {
+      "normal_load": {
+        "name": "Normal Load Test",
+        "description": "Normal operational load - 50 concurrent users",
+        "users": 50,
+        "spawn_rate": 2,
+        "duration": 300,
+        "expected_metrics": {
+          "min_rps": 40.0,
+          "max_failure_rate": 0.01,
+          "max_p95_response_time_ms": 200,
+          "max_avg_response_time_ms": 100
+        }
+      },
+      "peak_load": {
+        "name": "Peak Load Test",
+        "description": "Peak load scenario - 200 concurrent users",
+        "users": 200,
+        "spawn_rate": 5,
+        "duration": 600,
+        "expected_metrics": {
+          "min_rps": 120.0,
+          "max_failure_rate": 0.02,
+          "max_p95_response_time_ms": 500,
+          "max_avg_response_time_ms": 250
+        }
+      },
+      "stress_load": {
+        "name": "Stress Load Test",
+        "description": "Stress test - 500 concurrent users",
+        "users": 500,
+        "spawn_rate": 10,
+        "duration": 900,
+        "expected_metrics": {
+          "min_rps": 150.0,
+          "max_failure_rate": 0.05,
+          "max_p95_response_time_ms": 1000,
+          "max_avg_response_time_ms": 500
+        }
+      },
+      "spike_load": {
+        "name": "Spike Load Test",
+        "description": "Spike load: 0-300-0 users in 5 minutes",
+        "max_users": 300,
+        "spawn_rate": 15,
+        "duration": 300,
+        "pattern": "spike",
+        "expected_metrics": {
+          "min_rps": 100.0,
+          "max_failure_rate": 0.1,
+          "max_p95_response_time_ms": 2000,
+          "max_avg_response_time_ms": 800
+        }
+      },
+      "database_stress": {
+        "name": "Database Stress Test",
+        "description": "Database stress testing with heavy queries",
+        "users": 100,
+        "spawn_rate": 5,
+        "duration": 300,
+        "focus": "database_operations",
+        "expected_metrics": {
+          "min_rps": 60.0,
+          "max_failure_rate": 0.03,
+          "max_p95_response_time_ms": 800,
+          "max_avg_response_time_ms": 400
+        }
+      },
+      "circuit_breaker_stress": {
+        "name": "Circuit Breaker Stress Test",
+        "description": "Circuit breaker stress testing",
+        "users": 150,
+        "spawn_rate": 10,
+        "duration": 300,
+        "focus": "circuit_breaker_testing",
+        "expected_metrics": {
+          "min_rps": 80.0,
+          "max_failure_rate": 0.15,
+          "max_p95_response_time_ms": 1500,
+          "max_avg_response_time_ms": 600
+        }
+      },
+      "partner_api_stress": {
+        "name": "Partner API Stress Test",
+        "description": "Partner API (Apaleo) stress testing",
+        "users": 75,
+        "spawn_rate": 3,
+        "duration": 600,
+        "focus": "partner_api_testing",
+        "expected_metrics": {
+          "min_rps": 30.0,
+          "max_failure_rate": 0.02,
+          "max_p95_response_time_ms": 2000,
+          "max_avg_response_time_ms": 1000
+        }
+      },
+      "performance_regression": {
+        "name": "Performance Regression Test",
+        "description": "Performance regression baseline testing",
+        "users": 50,
+        "spawn_rate": 2,
+        "duration": 300,
+        "focus": "regression_testing",
+        "expected_metrics": {
+          "min_rps": 45.0,
+          "max_failure_rate": 0.01,
+          "max_p95_response_time_ms": 200,
+          "max_avg_response_time_ms": 100
+        }
+      }
+    },
+
+    "legacy_config": {
+      "concurrent_users": 20,
+      "requests_per_user": 50,
+      "test_duration": 120,
+      "memory_threshold_mb": 1000,
+      "max_response_time": 3.0,
+      "max_error_rate": 0.05
+    },
+
+    "test_categories": [
+      "Concurrent Call Simulation",
+      "PMS Connector Load Testing",
+      "Authentication System Load Testing",
+      "Memory Performance Testing",
+      "Database and Redis Performance",
+      "Network Failure Simulation",
+      "Circuit Breaker Stress Testing",
+      "Partner API Load Testing",
+      "Performance Regression Testing"
     ],
-    "packet_loss_rates": [0.0, 0.01, 0.05, 0.1, 0.2],
-    "bandwidth_limits": ["unlimited", "10mbps", "1mbps", "100kbps"]
-  },
-  
-  "memory_testing": {
-    "leak_detection_duration": 300,
-    "snapshot_interval": 30,
-    "gc_force_interval": 60,
-    "memory_growth_threshold_mb": 50
-  },
-  
-  "reporting": {
-    "generate_charts": true,
-    "save_raw_data": true,
-    "export_formats": ["json", "csv", "html"],
-    "include_system_metrics": true
+
+    "performance_thresholds": {
+      "api_response_time_ms": 2000,
+      "database_query_time_ms": 500,
+      "redis_operation_time_ms": 10,
+      "memory_leak_threshold_mb": 100,
+      "cpu_usage_threshold_percent": 80,
+      "error_rate_threshold": 0.05,
+      "p95_response_time_ms": 200,
+      "circuit_breaker_open_threshold": 3,
+      "partner_api_timeout_ms": 10000
+    },
+
+    "load_patterns": {
+      "ramp_up_duration": 30,
+      "steady_state_duration": 60,
+      "ramp_down_duration": 30,
+      "spike_patterns": {
+        "spike_duration": 60,
+        "hold_duration": 180,
+        "recovery_duration": 60
+      }
+    },
+
+    "service_endpoints": {
+      "health_check": "/healthz",
+      "authentication": "/auth/guest/login",
+      "mfa_endpoints": "/auth/mfa",
+      "call_management": "/calls",
+      "pms_connector": "/pms/apaleo",
+      "tts_service": "/tts/synthesize",
+      "asr_service": "/asr/transcribe",
+      "audio_processing": "/audio/process",
+      "monitoring": "/monitoring",
+      "circuit_breakers": "/monitoring/circuit-breakers",
+      "business_metrics": "/monitoring/metrics/business",
+      "performance_summary": "/monitoring/performance/summary"
+    },
+
+    "database_config": {
+      "connection_pool_sizes": [5, 10, 20, 50, 100],
+      "query_types": ["simple", "complex", "aggregation", "mfa_operations", "analytics"],
+      "concurrent_connections": [10, 25, 50, 100, 200],
+      "heavy_query_endpoints": [
+        "/api/guests/search",
+        "/api/calls/history",
+        "/api/analytics/call-volume",
+        "/api/analytics/performance-metrics",
+        "/auth/mfa/verify"
+      ]
+    },
+
+    "redis_config": {
+      "operation_types": ["string", "hash", "list", "set", "sorted_set"],
+      "data_sizes": [100, 1024, 10240, 102400],
+      "concurrent_clients": [10, 25, 50, 100],
+      "session_operations": ["store", "retrieve", "update", "delete"],
+      "cache_operations": ["get", "set", "invalidate", "bulk_operations"]
+    },
+
+    "circuit_breaker_config": {
+      "services_to_test": ["database", "tts", "asr", "apaleo"],
+      "failure_injection_rate": 0.3,
+      "expected_trips": true,
+      "recovery_time_seconds": 30,
+      "max_open_breakers": 3
+    },
+
+    "partner_api_config": {
+      "apaleo_endpoints": [
+        "/pms/apaleo/reservations",
+        "/pms/apaleo/payments/authorize",
+        "/pms/apaleo/payments/capture",
+        "/pms/apaleo/room-service",
+        "/pms/apaleo/guests",
+        "/pms/apaleo/reports/occupancy"
+      ],
+      "timeout_ms": 10000,
+      "rate_limits": {
+        "requests_per_minute": 1000,
+        "burst_allowance": 50
+      }
+    },
+
+    "network_simulation": {
+      "latency_scenarios": [
+        {"name": "normal", "latency_ms": 10, "jitter_ms": 2},
+        {"name": "slow", "latency_ms": 200, "jitter_ms": 50},
+        {"name": "very_slow", "latency_ms": 500, "jitter_ms": 100}
+      ],
+      "packet_loss_rates": [0.0, 0.01, 0.05, 0.1, 0.2],
+      "bandwidth_limits": ["unlimited", "10mbps", "1mbps", "100kbps"],
+      "geographic_simulation": {
+        "regions": ["EU-West", "US-East", "Asia-Pacific", "EU-Central", "US-West"],
+        "latency_distribution": [20, 80, 150, 35, 120]
+      }
+    },
+
+    "memory_testing": {
+      "leak_detection_duration": 300,
+      "snapshot_interval": 30,
+      "gc_force_interval": 60,
+      "memory_growth_threshold_mb": 50,
+      "stress_test_memory_mb": 1000
+    },
+
+    "monitoring_integration": {
+      "prometheus_url": "http://localhost:9090",
+      "metrics_collection": true,
+      "real_time_alerts": true,
+      "dashboard_integration": true,
+      "circuit_breaker_monitoring": true
+    },
+
+    "reporting": {
+      "generate_charts": true,
+      "save_raw_data": true,
+      "export_formats": ["json", "csv", "html"],
+      "include_system_metrics": true,
+      "regression_comparison": true,
+      "circuit_breaker_analysis": true,
+      "partner_api_analysis": true,
+      "recommendations": true
+    },
+
+    "security": {
+      "test_user_prefix": "load_test_",
+      "cleanup_after_test": true,
+      "anonymize_data": true,
+      "respect_rate_limits": true
+    }
   }
 }

@@ -171,7 +171,7 @@ class ApaleoWebhookManager:
                     property_ids=property_ids
                 )
 
-                return subscription
+            return subscription
 
         except Exception as e:
             logger.error("apaleo_webhook_subscription_error", error=str(e))
@@ -195,12 +195,12 @@ class ApaleoWebhookManager:
                 for sub in subscriptions_data.get("subscriptions", [])
                 ]
 
-                logger.info(
-                    "apaleo_webhook_subscriptions_retrieved",
-                    count=len(subscriptions)
-                )
+            logger.info(
+                "apaleo_webhook_subscriptions_retrieved",
+                count=len(subscriptions)
+            )
 
-                return subscriptions
+            return subscriptions
 
         except Exception as e:
             logger.error("apaleo_webhook_subscriptions_get_error", error=str(e))
